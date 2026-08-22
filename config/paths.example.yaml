@@ -1,0 +1,10 @@
+project_root: /path/to/CIPHER
+protected_data_root: /path/to/protected/data
+model_artifacts_root: /path/to/model/artifacts
+output_root: /path/to/CIPHER/outputs
+
+# External reference files; record version/date and SHA256 in the release manifest.
+variant_annotation: /path/to/CHD_SNP_variant_gene_with_symbol.csv
+gwas_catalog: /path/to/gwas-catalog-associations.tsv
+cytoband_hg38: /path/to/hg38_cytoBand.txt.gz
+baseline_table: /path/to/deidentified_baseline.tsv
