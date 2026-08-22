@@ -1,0 +1,26 @@
+name: cipher-figures
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - jupyterlab
+  - numpy
+  - pandas
+  - scipy
+  - matplotlib
+  - seaborn
+  - scikit-learn
+  - statsmodels
+  - lifelines
+  - scikit-survival
+  - xgboost
+  - pillow
+  - opencv
+  - scikit-image
+  - openpyxl
+  - pip
+  - pip:
+      - adjustText
+      - gseapy
+      - matplotlib-venn
+      - venn
