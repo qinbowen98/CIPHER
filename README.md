@@ -52,11 +52,3 @@ Some analyses may require additional system libraries and protected data access.
 | Main Figure 4 | `notebooks/main_figures/AAA_final_fig4.ipynb` |
 | Main Figure 5 | `notebooks/main_figures/AAA_final_fig5.ipynb` |
 | Supplementary Figures 0-6 | matching notebook under `notebooks/supplementary_figures/` |
-
-## Data availability and privacy
-
-Do not commit participant-level predictions, identifiers, images, ECG traces, genotypes, expression matrices, clinical records, or other protected data. Retained intermediate tables must be de-identified and privacy-reviewed. The `.gitignore` is only a guardrail; every staged file must still be reviewed manually.
-
-## License and citation
-
-Add the project license, manuscript citation, authorship/contribution statement, and data-access terms before public release.
