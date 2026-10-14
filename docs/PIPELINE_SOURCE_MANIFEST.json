@@ -1,0 +1,44 @@
+[
+  {
+    "source": "main_single_fivefold_update_Cell.py",
+    "destination": "pipelines/single_modal/train.py",
+    "source_sha256": "4cf63fc5a7ebcd9582e0fee334b4f662a15b25d95ddb6b6aea5aee128212befb",
+    "release_sha256": "221208bc1050165a2aa56353ad07b76daef070a8811a0616604c87b3962ef5c2",
+    "adapted": true
+  },
+  {
+    "source": "model.py",
+    "destination": "pipelines/single_modal/model.py",
+    "source_sha256": "bd458aef00a9051c4dd8b069fc0d06ea2e69685f55351997fb5b21caed874e58",
+    "release_sha256": "74bc9f4024e646d4608fcd87df20e05be549e324b60b44200bdee99bb0c1a3c4",
+    "adapted": false
+  },
+  {
+    "source": "main_multi_fivefold.py",
+    "destination": "pipelines/multi_modal/train.py",
+    "source_sha256": "cbdb38176ed48edf47b716aaf068b5c8fc0a3aa3f161c4387e6a18a2bee782e6",
+    "release_sha256": "df99d4f40241d5d2d4d94118bfe96e86017edb35f686ba473adf25f6d566ae81",
+    "adapted": true
+  },
+  {
+    "source": "model.py",
+    "destination": "pipelines/multi_modal/model.py",
+    "source_sha256": "bd458aef00a9051c4dd8b069fc0d06ea2e69685f55351997fb5b21caed874e58",
+    "release_sha256": "74bc9f4024e646d4608fcd87df20e05be549e324b60b44200bdee99bb0c1a3c4",
+    "adapted": false
+  },
+  {
+    "source": "common.py",
+    "destination": "pipelines/clinical/clinical_cipher/common.py",
+    "source_sha256": "64bb1697d2407277b37aed74f060054e6a4f57dc34ec4701a0217bca92eeb7d7",
+    "release_sha256": "64bb1697d2407277b37aed74f060054e6a4f57dc34ec4701a0217bca92eeb7d7",
+    "adapted": false
+  },
+  {
+    "source": "__init__.py",
+    "destination": "pipelines/clinical/clinical_cipher/__init__.py",
+    "source_sha256": "871b4edccf97e6c120dd821f5b99cc121a97852e5cc0645d7e16e77a0ccdbdca",
+    "release_sha256": "871b4edccf97e6c120dd821f5b99cc121a97852e5cc0645d7e16e77a0ccdbdca",
+    "adapted": false
+  }
+]

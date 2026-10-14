@@ -1,0 +1,53 @@
+.DS_Store
+.ipynb_checkpoints/
+__pycache__/
+*.py[cod]
+.venv/
+env/
+outputs/
+results/
+figures/
+logs/
+config/paths.yaml
+
+# Participant-level or large research data/model artifacts
+data/
+models/
+checkpoints/
+*.csv
+*.tsv
+*.xlsx
+*.xls
+*.parquet
+*.feather
+*.h5
+*.hdf5
+*.npy
+*.npz
+*.pkl
+*.pickle
+*.joblib
+*.pt
+*.pth
+*.ckpt
+*.xml
+*.txt
+*.tar
+*.tar.gz
+*.zip
+
+# Allow deliberately maintained small documentation/configuration files
+!config/*.yaml
+!docs/*.md
+
+# Pipeline runs and machine-specific protected paths never enter Git.
+private_runs/
+config/*.local.json
+config/*.local.yaml
+release/
+!requirements-clinical.txt
+!requirements-training.txt
+
+# Model pipeline source is code; fitted research artifacts stay ignored.
+!pipelines/models/
+!pipelines/models/*.py
