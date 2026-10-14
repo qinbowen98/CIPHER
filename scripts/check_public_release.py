@@ -9,6 +9,7 @@ import sys
 from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 FORBIDDEN = {".csv", ".tsv", ".xlsx", ".xls", ".parquet", ".feather", ".h5", ".hdf5", ".npy", ".npz", ".pkl", ".pickle", ".joblib", ".pt", ".pth", ".ckpt", ".xml", ".rds", ".bed", ".bim", ".fam", ".zip", ".gz", ".tar", ".log"}
 REQUIRED_MODEL_MODULES = [
     "pipelines/models/__init__.py", "pipelines/models/audit_public.py",
@@ -92,6 +93,13 @@ def main():
             notebook = json.loads(path.read_text())
             if any(c.get("outputs") or c.get("execution_count") is not None for c in notebook.get("cells", []) if c.get("cell_type") == "code"):
                 problems.append(name + ": notebook contains execution output")
+            from scripts.clean_notebooks import empty_source
+            for cell in notebook.get("cells", []):
+                source = "".join(cell.get("source", []))
+                if "ICVDr" in source or "Restricted-data analysis not included" in source:
+                    problems.append(name + ": obsolete endpoint or disclosure block")
+                if empty_source(source, cell.get("cell_type")):
+                    problems.append(name + ": empty notebook cell")
         if path.stat().st_size >= 95 * 1024 * 1024:
             problems.append(name + ": too large for ordinary Git")
     if problems:
