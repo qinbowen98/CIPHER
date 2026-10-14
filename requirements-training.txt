@@ -1,0 +1,13 @@
+# Reuse the validated CUDA server environment; record its exact versions per run.
+numpy>=1.23
+pandas>=1.5
+scipy>=1.9
+scikit-learn>=1.2
+torch>=2
+torchvision>=0.15
+timm>=0.9
+captum>=0.6
+lifelines>=0.27
+pandas-plink>=2
+Pillow>=9
+joblib>=1.2

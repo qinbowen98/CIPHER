@@ -1,0 +1,14 @@
+# Matches the sklearn version recorded by the existing MUCH model deployment.
+# Use the ORIGINAL training environment when loading historical artifacts.
+numpy==1.26.4
+scipy==1.11.4
+scikit-learn==1.3.2
+joblib==1.3.2
+pandas>=1.5,<3
+lifelines>=0.27,<0.31
+PyYAML>=6
+pyarrow>=10
+matplotlib>=3.6
+seaborn>=0.12
+pyreadr>=0.5
+# xgboost optional for private inference; public exporter blocks unreviewed XGB state.

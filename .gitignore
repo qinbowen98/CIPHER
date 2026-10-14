@@ -39,3 +39,11 @@ checkpoints/
 # Allow deliberately maintained small documentation/configuration files
 !config/*.yaml
 !docs/*.md
+
+# Pipeline runs and machine-specific protected paths never enter Git.
+private_runs/
+config/*.local.json
+config/*.local.yaml
+release/
+!requirements-clinical.txt
+!requirements-training.txt

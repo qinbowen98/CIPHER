@@ -24,7 +24,7 @@ Scope: static review of the 12 supplied notebooks. A choice is listed because it
 
 ## Reproducibility/engineering issues
 
-1. Absolute paths (`/home/qinbw/CIPHER`, `/data200T/...`) and timestamped run directories prevent execution elsewhere.
+1. Absolute paths (`data/private/inputs`, `data/private/...`) and timestamped run directories prevent execution elsewhere.
 2. Notebooks include shell commands (`cat`, `ls`, `head`, `tar`) and network download of UCSC cytobands; these should become explicit setup scripts with checksums.
 3. Repeated and revised code cells contain conflicting constants (for example cutoff 0.4 followed by 0.5). A clean run may not reproduce an interactive run unless execution order is enforced.
 4. Input tables, trained models, manifests, and a data dictionary are absent. The repository currently documents analysis code, not a complete reproducible research compendium.

@@ -1,62 +1,93 @@
-# CIPHER figure and analysis code
+# CIPHER
 
-This repository contains the notebooks used to calculate results and generate the main and supplementary figures for CIPHER.
+Training pipelines and a focused external-validation pipeline using exactly two frozen ASCVD models.
+The repository contains English source/documentation and relative example paths only.
 
-## Repository layout
+## Final model pair
 
-```text
-notebooks/
-  main_figures/            Figure 1-5 notebooks
-  supplementary_figures/  Supplementary Figure 0-6 notebooks
-config/
-  paths.example.yaml       Example local data-path configuration
-docs/
-  ARBITRARY_CHOICES_AUDIT.md
-  PUBLIC_DATA_BOUNDARY.md
-scripts/
-  audit_notebooks.py       Static reproducibility checks
-environment.yml
-```
+| Role | Algorithm | Training target | Released weight |
+|---|---|---|---|
+| Risk-based CIPHER | Logistic regression | Top 50% teacher-risk label | `release/public_models/risk.joblib` |
+| Event-based CIPHER | Random forest regression | Event time | `release/public_models/event.joblib` |
 
-Notebook outputs have been cleared for a smaller, reviewable repository. The source notebooks in `Downloads` were not modified.
+Both artifacts are clinical wave 1.0 models with the same 13-feature input contract.
+The released files have been rebuilt from reviewed inference state, stripped of source paths and participant metadata,
+reloaded and checked for score parity on generated inputs. SHA256 hashes bind each file to its manifest.
+The pair matches the frozen identities named in the final age-band analysis configuration; server-side hashes
+can be compared with `source_sha256` in `release/model_manifest.json` to confirm identical source files.
 
-## Reproducibility status
+## Setup
 
-The notebooks are a public, derived-data-only release. Code that reads or processes source clinical data, protein expression/input values, raw genotypes, original fundus images, raw ECG waveforms, or participant-level cohort tables has been replaced by disclosure notes. See `docs/PUBLIC_DATA_BOUNDARY.md` for the exact boundary.
-
-The retained workflow is **not portable end to end** until its permitted intermediate artifacts are supplied. Before claiming reproducibility:
-
-1. Place de-identified input data/model artifacts in a stable location.
-2. Replace remaining internal paths to permitted intermediate artifacts with values loaded from `config/paths.yaml` (start from `config/paths.example.yaml`).
-3. Record the provenance and checksum of every external input.
-4. Resolve the high-priority items in `docs/ARBITRARY_CHOICES_AUDIT.md` and report sensitivity analyses.
-5. Execute notebooks from a clean environment and save an execution log.
-
-## Environment
+Use Python 3.10+ in an isolated environment. Historical artifacts use scikit-learn 1.3.2.
 
 ```bash
-conda env create -f environment.yml
-conda activate cipher-figures
-jupyter lab
+python -m pip install -r requirements-clinical.txt
+cp config/pipeline.example.json config/pipeline.local.json
 ```
 
-Some analyses may require additional system libraries and protected data access. Package versions should be frozen after the notebooks have been rerun successfully in the target environment.
+Edit the local configuration to point to authorized input files. Relative paths are resolved from the configuration file.
+The local configuration, private inputs, run outputs and caches are ignored by Git.
 
-## Notebook map
+## Reproduce UKB and MUCH
 
-| Manuscript item | Notebook |
-|---|---|
-| Main Figure 1 | `notebooks/main_figures/AAA_final_fig1.ipynb` |
-| Main Figure 2 | `notebooks/main_figures/AAA_final_fig2.ipynb` |
-| Main Figure 3 | `notebooks/main_figures/AAA_final_fig3.ipynb` |
-| Main Figure 4 | `notebooks/main_figures/AAA_final_fig4.ipynb` |
-| Main Figure 5 | `notebooks/main_figures/AAA_final_fig5.ipynb` |
-| Supplementary Figures 0-6 | matching notebook under `notebooks/supplementary_figures/` |
+```bash
+python pipelines/run.py infer --dry-run
+python pipelines/run.py ukb
+python pipelines/run.py much
+# Or run both cohorts:
+python pipelines/run.py infer
+```
 
-## Data availability and privacy
+The comparison includes the two CIPHER predictors plus historical Framingham, China-PAR and CKM2S2-BAG formulas.
+No model is trained, recalibrated or selected using either external cohort.
+The pipeline writes only aggregate metrics, bootstrap confidence intervals and comparison figures.
 
-Do not commit participant-level predictions, identifiers, images, ECG traces, genotypes, expression matrices, clinical records, or other protected data. Retained intermediate tables must be de-identified and privacy-reviewed. The `.gitignore` is only a guardrail; every staged file must still be reviewed manually.
+UKB CIPHER scores use the original clinical-feature table. Clinical comparator scores use the enriched-feature table.
+These inputs must not be substituted for one another. The pipeline checks the locked 40-74 and 60-74 cohort counts.
+MUCH uses the completed, standardized clinical table from the final analysis; a raw RDS is not interchangeable with it.
+Optional private historical prediction files can verify every cohort member and score without producing sample outputs.
 
-## License and citation
+See [input and analysis contracts](docs/FINAL_INFERENCE.md) and [model provenance](docs/FINAL_MODELS.md).
+Real cohort results still require authorized input data. No external-result numbers have been fabricated or bundled.
 
-Add the project license, manuscript citation, authorship/contribution statement, and data-access terms before public release.
+## Training stages
+
+```bash
+python -m pip install -r requirements-training.txt
+python pipelines/run.py single --dry-run
+python pipelines/run.py multi --dry-run
+python pipelines/run.py single
+python pipelines/run.py multi
+```
+
+The original five-fold single-modal and multimodal training designs are retained.
+All required modality assets must be available in the protected training working directory.
+Multimodal initialization is not automatically connected to architecture-dependent single-modal best weights.
+Training outputs remain private and are not inputs to the fixed final-pair inference stage.
+
+## Publish aggregate results and push
+
+```bash
+python pipelines/run.py publish-results
+python scripts/check_public_release.py --stage
+python scripts/check_public_release.py --staged
+git diff --cached --stat
+git commit -m "Add frozen two-model UKB and MUCH reproduction pipeline"
+git push -u origin HEAD
+```
+
+`publish-results` copies only validated model/replicate-level metric tables into `release/public_results/`.
+It does not copy private tables, predictions, figures, logs or input configurations.
+Skip that step when cohort analyses have not yet run: code and the two vetted model weights can still be published.
+The staging script explicitly includes only receipted model weights and aggregate tables.
+
+## Validation
+
+```bash
+python -m unittest discover -s tests -v
+python scripts/check_public_release.py
+```
+
+Tests cover frozen model identity/parity, clinical-score formula parity, source-table separation, shared evaluation cohorts,
+participant-table rejection and release receipts. Real UKB/MUCH counts and metrics remain subject to the authorized inputs.
+Legacy figure notebooks are retained as source-only references with English comments, cleared outputs and relative input placeholders.
