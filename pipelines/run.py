@@ -46,13 +46,10 @@ def training_commands(stage, cfg, config_path):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument('stage', choices=['single', 'multi', 'ukb', 'much', 'infer', 'publish-results', 'check'])
+    p.add_argument('stage', choices=['single', 'multi', 'ukb', 'much', 'infer'])
     p.add_argument('--config', type=Path, default=ROOT / 'config/pipeline.local.json')
     p.add_argument('--dry-run', action='store_true')
     args = p.parse_args()
-    if args.stage == 'check':
-        subprocess.run([sys.executable, str(ROOT/'scripts/check_public_release.py')], cwd=ROOT, check=True)
-        return
     config_path = args.config.resolve()
     cfg = json.loads(config_path.read_text())
     if args.stage in {'single', 'multi'}:
@@ -68,11 +65,6 @@ def main():
         print(('Planned: ' if args.dry_run else 'Running: ') + cohort + ' final frozen pair', flush=True)
         if not args.dry_run:
             subprocess.run([sys.executable, '-m', 'pipelines.inference.final_pair', '--config', str(config_path), '--cohort', cohort], cwd=ROOT, check=True)
-    if args.stage == 'publish-results':
-        if args.dry_run:
-            print('Planned: publish validated aggregate UKB/MUCH metrics only')
-        else:
-            subprocess.run([sys.executable, '-m', 'pipelines.models.publish_results', '--config', str(config_path)], cwd=ROOT, check=True)
 
 
 if __name__ == '__main__':
