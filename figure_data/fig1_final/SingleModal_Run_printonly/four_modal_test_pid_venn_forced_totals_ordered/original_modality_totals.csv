@@ -1,5 +1,5 @@
-modality,display_label,original_n_samples
-SNP,SNP,1005
-ECG,ECG,840
-Soma,Plasma proteomics,1260
-Fundus,Fundus,990
+cohort,modality,display_label,n_with_outcome,n_enrolled_reported
+CMCS-SG,SNP,SNP,1005,1005
+CMCS-SG,ECG,ECG,840,875
+CMCS-SG,Soma,Plasma proteomics,1260,1260
+CMCS-SG,Fundus,Fundus,990,1122

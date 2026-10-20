@@ -1,0 +1,5 @@
+cohort,modality,display_label,n_with_outcome,n_enrolled_reported
+CMCS-BD,SNP,SNP,2692,2765
+CMCS-BD,ECG,ECG,1384,1423
+CMCS-BD,Soma,Plasma proteomics,1388,1361
+CMCS-BD,Fundus,Fundus,1202,1438
