@@ -1,0 +1,16 @@
+endpoint,combination,display_combination,degree,count
+CHD,SNP|ECG|Soma|Fundus,SNP|ECG|Plasma proteomics|Fundus,4,686
+CHD,SNP|ECG|Soma,SNP|ECG|Plasma proteomics,3,136
+CHD,SNP|ECG|Fundus,SNP|ECG|Fundus,3,460
+CHD,SNP|Soma|Fundus,SNP|Plasma proteomics|Fundus,3,26
+CHD,ECG|Soma|Fundus,ECG|Plasma proteomics|Fundus,3,12
+CHD,SNP|ECG,SNP|ECG,2,82
+CHD,SNP|Soma,SNP|Plasma proteomics,2,301
+CHD,SNP|Fundus,SNP|Fundus,2,12
+CHD,ECG|Soma,ECG|Plasma proteomics,2,3
+CHD,ECG|Fundus,ECG|Fundus,2,5
+CHD,Soma|Fundus,Plasma proteomics|Fundus,2,1
+CHD,SNP,SNP,1,989
+CHD,ECG,ECG,1,0
+CHD,Soma,Plasma proteomics,1,222
+CHD,Fundus,Fundus,1,0

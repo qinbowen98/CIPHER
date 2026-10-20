@@ -1,0 +1,7 @@
+method,endpoint,mean_cindex,sd_cindex,sem_cindex,n_runs,selection_rule
+IRN,CHD,0.5943776846425404,0.009402730525534328,0.004205028925841408,5,highest five endpoint-mean C-indices
+normlog1p,CHD,0.578848060101212,0.009433032101707092,0.0042185802026709655,5,lowest five endpoint-mean C-indices
+IRN,istroke,0.5723138794768675,0.01338590361807205,0.005986358086053897,5,highest five endpoint-mean C-indices
+normlog1p,istroke,0.5853563021839407,0.012941365266529125,0.005787554491522771,5,lowest five endpoint-mean C-indices
+IRN,ICVD,0.5639067705899203,0.006311392198994684,0.002822540397922803,5,highest five endpoint-mean C-indices
+normlog1p,ICVD,0.5785341695436522,0.005422376241012825,0.0024249603748968955,5,lowest five endpoint-mean C-indices
