@@ -34,6 +34,22 @@ Set input and output locations in `pipeline.local.json`. Relative paths resolve 
 
 The stages below run in order. Use `--config` to select another configuration and `--dry-run` to inspect planned preprocessing or training jobs.
 
+## Source-cohort endpoint definitions
+
+The following definitions apply to the CMCS source cohorts. CHD was classified using these MONICA-informed study rules; an event was recorded when any of the following conditions was met:
+
+1. The primary discharge diagnosis was ICD-10 I21 or I22.
+2. Discharge disposition was coded as `5`, and the primary discharge diagnosis was I20, I23, I24 or I25.
+3. Discharge disposition was coded as `5`, at least one discharge diagnosis was I46, I50, R96, R98 or R99, and at least one discharge diagnosis was in I20–I25.
+
+These categories cover definite acute myocardial infarction, coronary heart disease death, and sudden death in participants with a history of coronary heart disease. Discharge disposition code `5` refers to the coding used in the source hospital records.
+
+Ischemic stroke (`fistroke`; pipeline endpoint `istroke`) was defined by a primary discharge diagnosis of I63 or I69.3, excluding I63.903.
+
+Ischemic cardiovascular disease (`fICVD`; pipeline endpoint `ICVD`) was the composite of CHD and ischemic stroke: `fICVD = CHD OR fistroke`.
+
+UKB and MUCH use their cohort-specific outcome ascertainment and field mappings; the source-cohort discharge rules above are not applied to those cohorts by default.
+
 ## 0. Preprocess modality inputs
 
 ```bash
