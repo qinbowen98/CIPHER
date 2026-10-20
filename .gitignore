@@ -8,6 +8,7 @@ outputs/
 results/
 figures/
 logs/
+/notebooks/
 config/paths.yaml
 
 # Participant-level or large research data/model artifacts
