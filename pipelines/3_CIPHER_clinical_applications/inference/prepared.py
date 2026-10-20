@@ -1,16 +1,13 @@
 """Frozen clinical inference for prepared UKB/MUCH tables; aggregate output by default."""
 import argparse
 import json
-import sys
 from pathlib import Path
 
 import joblib
 import numpy as np
 import pandas as pd
 
-ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "pipelines/clinical"))
-from clinical_cipher.common import clip_frame, minmax_apply, predict_estimator_score, read_table, safe_cindex, safe_event_auc, safe_horizon_auc
+from ..clinical_cipher.common import clip_frame, minmax_apply, predict_estimator_score, read_table, safe_cindex, safe_event_auc, safe_horizon_auc
 
 
 def predict(artifact, frame):

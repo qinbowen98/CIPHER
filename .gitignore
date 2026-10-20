@@ -8,7 +8,6 @@ outputs/
 results/
 figures/
 logs/
-/notebooks/
 config/paths.yaml
 
 # Participant-level or large research data/model artifacts
@@ -44,5 +43,26 @@ config/*.local.yaml
 release/
 
 # Model pipeline source is code; fitted research artifacts stay ignored.
-!pipelines/models/
-!pipelines/models/*.py
+
+/figure_data/
+
+/figure_outputs/
+
+# Feature identifiers only; no participant records or association rows.
+!pipelines/0_preprocess/soma_panels/*.csv
+!pipelines/3_CIPHER_clinical_applications/models/
+!pipelines/3_CIPHER_clinical_applications/models/*.py
+
+# Distribution assets: plotting source and the frozen clinical pair.
+!release/
+release/*
+!release/public_models/
+release/public_models/*
+!release/public_models/risk.joblib
+!release/public_models/event.joblib
+
+/config/
+/tests/
+/release/model_manifest.json
+/pipeline.local.json
+/predictions.local.json

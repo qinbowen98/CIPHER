@@ -40,7 +40,6 @@ class SomaTokenEncoder(nn.Module):
 # Utility: Flexible checkpoint loader
 ########################################
 def _load_state_dict_flexible(model, ckpt_path, submodule_prefix_hints=()):
-    """Analysis helper. Inputs and outputs follow the function implementation."""
     import os
     if not os.path.isfile(ckpt_path):
         print(f"[WARN] ckpt not found: {ckpt_path}")

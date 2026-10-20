@@ -9,6 +9,8 @@ IDENTITIES = {
     'risk': {'endpoint': 'ASCVD', 'strategy': 'top_risk_label_classification', 'target': 'top50', 'model_name': 'Logistic'},
     'event': {'endpoint': 'ASCVD', 'strategy': 'direct_survival_regression', 'target': 'event_time', 'model_name': 'RF'},
 }
+MODEL_FILES = [{'role': 'risk', 'file': 'public_models/risk.joblib', 'sha256': 'beefd6415a2795b556f36425f94ca4d60ed25803d9feff0e02b275d54b7ed102'}, {'role': 'event', 'file': 'public_models/event.joblib', 'sha256': '700706f341003f76063e0ef4717fbbbc06633382f888661efc56fab8703fca08'}]
+
 FEATURES = ['age_feat', 'sex', 'SBP', 'DBP', 'TC', 'TG', 'HDLC', 'LDLC', 'BMI', 'height', 'weight', 'waist', 'smoking']
 
 
@@ -46,7 +48,7 @@ def score(artifact, frame):
 
 def load_pair(directory):
     directory = Path(directory)
-    rows = json.loads((directory / 'model_manifest.json').read_text())
+    rows = MODEL_FILES
     if len(rows) != 2 or {row['role'] for row in rows} != {'risk', 'event'}:
         raise ValueError('Expected exactly two frozen models')
     pair = {}

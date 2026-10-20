@@ -1,11 +1,25 @@
 # main_single.py
 import os
+import importlib
+import json
+import sys
+from pathlib import Path
+import joblib
 import warnings
 warnings.filterwarnings("ignore")
 
 import argparse
 from datetime import datetime
 import xml.etree.ElementTree as ET
+
+# Shared preprocessing is imported by name so serialized transforms remain loadable.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+_soma = importlib.import_module("pipelines.0_preprocess.soma")
+_signals = importlib.import_module("pipelines.0_preprocess.imaging_ecg")
+from pipelines.metrics import event_auroc
+load_soma_table = _soma.load_soma_table
+apply_soma_norm_train = _soma.apply_soma_norm_train
+apply_soma_norm_test = _soma.apply_soma_norm_test
 
 # ==== PyData ====
 import numpy as np
@@ -50,9 +64,11 @@ from sklearn.model_selection import train_test_split, GroupKFold, StratifiedKFol
 # ------------------------------------------------------------------------------------
 # Config
 # ------------------------------------------------------------------------------------
+FUNDUS_NORMALIZATION = "imagenet"
 VISIT_OFFSET = {"02": 0, "07": 5, "12": 10, "20": 18}
 ENDPOINTS = {
     "CHD": "fCHD_y",
+    "CHDr": "fCHDr_y",
     "ICVD": "fICVD_y",
     "CVDdeath": "death_yCDC",
     "stroke": "fstroke_y",
@@ -100,29 +116,7 @@ def safe_to_csv(df, path):
     df.to_csv(path, index=False)
 
 def read_ecg_from_xml(file_path, max_len=1000):
-    """Read ECG XML -> (max_len, 12) float32, pad with zeros if short."""
-    try:
-        if not os.path.isfile(file_path):
-            return np.zeros((max_len, 12), dtype=np.float32)
-        tree = ET.parse(file_path)
-        root = tree.getroot()
-        leads = []
-        for seq in root.findall(".//sequence"):
-            digits = seq.find("value/digits")
-            if digits is not None and digits.text:
-                leads.append(list(map(int, digits.text.strip().split())))
-        leads = leads[:12]
-        if len(leads) == 0:
-            return np.zeros((max_len, 12), dtype=np.float32)
-        min_len = min(len(ld) for ld in leads)
-        arr = np.array([ld[:min_len] for ld in leads], dtype=np.float32).T  # (T, 12)
-        if arr.shape[0] >= max_len:
-            return arr[:max_len]
-        out = np.zeros((max_len, 12), dtype=np.float32)
-        out[:arr.shape[0]] = arr
-        return out
-    except Exception:
-        return np.zeros((max_len, 12), dtype=np.float32)
+    return _signals.read_ecg(file_path, length=max_len, normalization="none")
 
 class CoxHead(nn.Module):
     def __init__(self, hidden_dim=128):
@@ -134,103 +128,14 @@ class CoxHead(nn.Module):
 # ------------------------------------------------------------------------------------
 # Normalization
 # ------------------------------------------------------------------------------------
-def load_gene_list(path):
-    """
-    Robust reader for a gene list file. Accepts CSV/TSV/TXT with either:
-      - one gene symbol per line, or
-      - a header line like 'Gene' followed by entries, or
-      - a single line with space/comma/semicolon separated symbols.
-    Returns a list[str] of unique gene symbols (uppercase, stripped).
-    """
-    genes = []
-    if not os.path.isfile(path):
-        print(f"[WARN] Gene list file not found: {path}")
-        return genes
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            raw = f.read().strip()
-        # split by newlines first
-        lines = [x.strip() for x in raw.replace("\r", "\n").split("\n") if x.strip()]
-        # If only 1 line and contains many separators, split by non-word chars
-        if len(lines) == 1 and ("," in lines[0] or ";" in lines[0] or " " in lines[0] or "\t" in lines[0]):
-            parts = [p.strip() for p in re.split(r"[,\s;]+", lines[0]) if p.strip()]
-            genes.extend(parts)
-        else:
-            # Possibly header like "Gene, A2M, ..." or one per line
-            for ln in lines:
-                # split by common separators, keep non-empty
-                parts = [p.strip() for p in re.split(r"[,\s;]+", ln) if p.strip()]
-                # Drop a leading header token like 'Gene' or 'GENE'
-                if parts and parts[0].lower() in {"gene", "genes"} and len(parts) > 1:
-                    parts = parts[1:]
-                genes.extend(parts)
-        # Normalize
-        genes = list(dict.fromkeys([g.upper() for g in genes if g]))  # unique keep-order
-    except Exception as e:
-        print(f"[WARN] load_gene_list failed: {e}")
-        genes = []
-    return genes
 
-def inverse_rank_normalize_vec(vec):
-    ranks = rankdata(vec, method="average")
-    u = (ranks - 0.5) / len(vec)
-    return norm.ppf(np.clip(u, 1e-6, 1 - 1e-6))
-def fit_ranknorm_global(df_soma_all,feature_cols):
-    X=df_soma_all[feature_cols].values.astype(float)
-    sorted_list = [np.sort(X[:,j]) for j in range(X.shape[1])]
-    return sorted_list
 # ------------------------------------------------------------------------------------
 # Correct global rank normalization (train-fit → valid/test-transform)
 # ------------------------------------------------------------------------------------
-class GlobalRankNormalizer:
-    def __init__(self):
-        self.sorted_values = None
-        self.n = None
-
-    def fit(self, X):
-        X = np.asarray(X, float)
-        self.n = X.shape[0]
-        self.sorted_values = [np.sort(X[:, j]) for j in range(X.shape[1])]
-        return self
-
-    def transform(self, X):
-        X = np.asarray(X, float)
-        X_new = np.zeros_like(X)
-        for j in range(X.shape[1]):
-            base = self.sorted_values[j]
-            ranks = np.searchsorted(base, X[:, j], side="right")
-            u = (ranks - 0.5) / len(base)
-            X_new[:, j] = norm.ppf(np.clip(u, 1e-6, 1 - 1e-6))
-        return X_new
 
 
-def apply_soma_norm_train(df, feature_cols, method):
-    df = df.copy()
-    if method == "none":
-        return df, None
-    X = df[feature_cols].values.astype(float)
-
-    if method == "minmax":
-        scaler = MinMaxScaler().fit(X)
-        df[feature_cols] = scaler.transform(X)
-        return df, scaler
-
-    elif method == "ranknorm":
-        scaler = GlobalRankNormalizer().fit(X)
-        df[feature_cols] = scaler.transform(X)
-        return df, scaler
-
-    else:
-        raise ValueError()
 
 
-def apply_soma_norm_test(df, feature_cols, method, scaler):
-    df = df.copy()
-    if method == "none":
-        return df
-    X = df[feature_cols].values.astype(float)
-    df[feature_cols] = scaler.transform(X)
-    return df
 
 # ------------------------------------------------------------------------------------
 # Data Loading helpers (file presence -> pid maps / tables)
@@ -259,23 +164,6 @@ def load_snp_table(plink_prefix):
     snp_df = pd.DataFrame(bed.compute().T, index=idx, columns=bim.snp.astype(str)).fillna(0)
     return snp_df
 
-def load_soma_table(path):
-    # Expect SampleId: "PID" or "Vxx-PID"
-    df = pd.read_csv(path)
-    def parse_sid(x):
-        parts = str(x).split("-")
-        if len(parts) == 2:
-            return parts[-1], "02"
-        elif len(parts) >= 3:
-            #print(parts)
-            return parts[-1], parts[1]
-        else:
-            return str(x), "02"
-    pid, visit = zip(*df["SampleId"].map(parse_sid))
-    df["pid"] = list(pid)
-    df["visit"] = list(visit)
-    #print('load_soma_table(path)',df)
-    return df
 
 def load_shougang_test_ids(cmcs_standard_csv):
     if not os.path.isfile(cmcs_standard_csv):
@@ -396,10 +284,7 @@ class FundusDataset(Dataset):
         self.df = df_ids.reset_index(drop=True)
         self.img_map = img_map
 
-        self.tf = transforms.Compose([
-            transforms.Resize((image_size, image_size)),
-            transforms.ToTensor(),
-        ])
+        self.tf = _signals.fundus_transform(image_size, FUNDUS_NORMALIZATION)
 
         # ---- NEW: preload images into memory ----
         self.cache_img = {}
@@ -526,6 +411,9 @@ def evaluate_risk_and_embed(model, loader, device, need_embed=False):
 def save_pred_csv(outdir, tag, pids, risk, time, event):
     df = pd.DataFrame({"ID": pids, "risk": risk, "time": time, "event": event})
     safe_to_csv(df, os.path.join(outdir, "preds", f"{tag}_pred.csv"))
+    safe_to_csv(pd.DataFrame([{"tag": tag, "n": len(df), "events": int(df.event.sum()),
+                              "event_auroc": event_auroc(df.event.to_numpy(), df.risk.to_numpy())}]),
+                os.path.join(outdir, "metrics", f"{tag}_metrics.csv"))
 
 def save_curve_csv(outdir, tag, df_log):
     safe_to_csv(df_log, os.path.join(outdir, "curves", f"{tag}_train_curve.csv"))
@@ -570,31 +458,41 @@ def select_best_setting_across_grid(results_list):
 # Interpretability
 # ------------------------------------------------------------------------------------
 def explain_integrated_gradients(model, loader, device, out_csv, feature_names=None, modality="tabular"):
-    """Analysis helper. Inputs and outputs follow the function implementation."""
     model.eval()
     ig = IntegratedGradients(model)
-    all_attr = []
-    for batch in loader:
-        x, t, e, pid = batch
+    output = Path(out_csv)
+    batches = output.with_suffix("").with_name(output.stem + "_per_sample")
+    batches.mkdir(parents=True, exist_ok=False)
+    total, count, records = None, 0, []
+    for index, (x, time, event, pid) in enumerate(loader):
         x = x.to(device)
-        baseline = torch.zeros_like(x)
-        attr = ig.attribute(inputs=x, baselines=baseline, target=None)
-        all_attr.append(attr.detach().cpu().numpy())
-    if not len(all_attr):
-        return
-    A = np.concatenate(all_attr, axis=0)
-
-    if modality in ("snp", "soma"):
-        mean_attr = np.mean(np.abs(A), axis=0)
-        if feature_names is None:
-            feature_names = [f"f{i}" for i in range(len(mean_attr))]
-        pd.DataFrame({"feature": feature_names, "importance": mean_attr}).to_csv(out_csv, index=False)
-    elif modality == "ecg":
-        mean_attr = np.mean(np.abs(A), axis=0)  # (T, 12) if input (B,T,12)
-        np.savetxt(out_csv.replace(".csv", "_ecg_attr.txt"), mean_attr, fmt="%.6f")
+        attr = ig.attribute(inputs=x, baselines=torch.zeros_like(x), target=None)
+        values = attr.detach().cpu().numpy()
+        inputs = x.detach().cpu().numpy()
+        identifiers = np.asarray([str(value) for value in pid], dtype=str)
+        if len(identifiers) != len(values):
+            raise ValueError("IG identifiers and sample dimension do not match.")
+        target = batches / ("batch_%06d.npz" % index)
+        np.savez_compressed(target, pid=identifiers, attribution=values, inputs=inputs,
+                            time=time.detach().cpu().numpy(), event=event.detach().cpu().numpy())
+        summed = np.abs(values).sum(axis=0, dtype=np.float64)
+        total = summed if total is None else total + summed
+        count += len(values)
+        records.append({"file": target.name, "n": len(values)})
+    if not count:
+        raise ValueError("IG evaluation loader is empty.")
+    mean_attr = total / count
+    if modality in ("snp", "soma", "tabular"):
+        names = feature_names if feature_names is not None else ["f%d" % i for i in range(len(mean_attr))]
+        pd.DataFrame({"feature": names, "importance": mean_attr}).to_csv(output, index=False)
     else:
-        mean_attr = np.mean(np.abs(A), axis=0)  # (C,H,W)
-        np.save(out_csv.replace(".csv", "_fundus_ig.npy"), mean_attr)
+        np.save(output.with_suffix(".npy"), mean_attr)
+    (batches / "manifest.json").write_text(json.dumps({
+        "n_samples": count, "modality": modality, "features": feature_names,
+        "split": "external_evaluation", "baseline": "zero in model-input space",
+        "attribution": "signed integrated gradients", "participant_outputs": True,
+        "batches": records}, indent=2) + "\n")
+
 class VitGradCAM:
     def __init__(self, vit_block):
         self.activation = None
@@ -642,7 +540,7 @@ class VitGradCAM:
         cam = cam[:, 1:]  # drop CLS
         return cam
 '''
-"""Analysis helper. Inputs and outputs follow the function implementation."""
+"""Write mean absolute integrated gradients to the protected run directory."""
 '''
 def explain_vit_gradcam(model, loader, device, outdir , endpoint):
     gradcam = VitGradCAM(model.fundus_enc.blocks[-1], model.fundus_enc.blocks[-1])
@@ -702,6 +600,25 @@ class SomaTokenTransformer(nn.Module):
 # ------------------------------------------------------------------------------------
 # Main
 # ------------------------------------------------------------------------------------
+def save_soma_cv(results, lr, batch_size, endpoint, model, normalization, feature_count, seed, outdir):
+    rows = [{"endpoint": endpoint, "model": model, "normalization": normalization,
+             "n_features": feature_count, "seed": seed, "fold": fold,
+             "learning_rate": lr, "batch_size": batch_size, "valid_cindex": ci}
+            for fold, candidate_lr, candidate_bs, ci, _ in results
+            if candidate_lr == lr and candidate_bs == batch_size]
+    frame = pd.DataFrame(rows)
+    if len(frame) != 5 or frame["fold"].nunique() != 5:
+        raise ValueError("Soma CV export requires exactly five distinct validation folds.")
+    path = os.path.join(outdir, "cv_folds.csv")
+    previous = pd.read_csv(path) if os.path.isfile(path) else pd.DataFrame()
+    pd.concat([previous, frame], ignore_index=True).to_csv(path, index=False)
+    summary = frame.iloc[0].drop(labels=["fold", "valid_cindex"]).to_dict()
+    summary.update(n_folds=5, mean_valid_ci=frame.valid_cindex.mean(), std_valid_ci=frame.valid_cindex.std(ddof=1))
+    path = os.path.join(outdir, "cv_summary.csv")
+    previous = pd.read_csv(path) if os.path.isfile(path) else pd.DataFrame()
+    pd.concat([previous, pd.DataFrame([summary])], ignore_index=True).to_csv(path, index=False)
+
+
 def main():
     parser = argparse.ArgumentParser()
     # Choose exactly one modality
@@ -725,20 +642,29 @@ def main():
     parser.add_argument("--endpoints", type=str, nargs="+", default=list(ENDPOINTS.keys()))
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--outdir", type=str, default="SingleModal_Run_update_v2")
+    parser.add_argument("--outdir", type=str, default="private_runs/single")
 
 
-    parser.add_argument("--grid_lr", type=float, nargs="+", default=[1e-5, 1e-4])
-    parser.add_argument("--grid_bs", type=int, nargs="+", default=[16,32])
+    parser.add_argument("--grid_lr", type=float, nargs="+", default=[1e-4, 3e-4, 1e-3])
+    parser.add_argument("--grid_bs", type=int, nargs="+", default=[32,64,128,256])
 
     # Soma normalization
-    parser.add_argument("--soma_norm", type=str, choices=["ranknorm", "minmax", "none","geneset"], default="ranknorm")
+    parser.add_argument("--soma_norm", type=str, choices=["ranknorm", "log1p", "minmax", "none", "geneset"], default="ranknorm")
         # Soma gene-subset experiment
     parser.add_argument("--soma_gene_csv", type=str, default="final_genelist_Cardio.csv",
                         help="CSV/TXT of gene symbols for SOMA gene-subset experiment")
+    parser.add_argument("--soma_models", nargs="+", choices=["transformer", "mlp", "pca"], default=["transformer", "mlp", "pca"])
+    parser.add_argument("--soma_gene_match", choices=["auto", "gene", "feature"], default="auto")
+    parser.add_argument("--soma_gene_norm", choices=["ranknorm", "log1p", "minmax", "none"], default="ranknorm")
     parser.add_argument("--soma_gene_prefix", type=str, default="seq.",
                         help="Prefix of SOMA feature columns (default 'seq.' so 'seq.GENE')")
+    parser.add_argument("--fundus_normalization", choices=["imagenet", "half", "none"], default="imagenet")
+    parser.add_argument("--soma_input_transform", choices=["raw", "log1p"], default="log1p")
     args = parser.parse_args()
+    global FUNDUS_NORMALIZATION
+    FUNDUS_NORMALIZATION = args.fundus_normalization
+    if args.soma_input_transform == "log1p" and (args.soma_norm == "log1p" or (args.soma_norm == "geneset" and args.soma_gene_norm == "log1p")):
+        raise ValueError("Input already contains log1p values; choose minmax, ranknorm, or none.")
     set_seed(args.seed)
 
     # pick modality
@@ -749,7 +675,7 @@ def main():
     modality = "fundus" if args.fundus else "ecg" if args.ecg else "snp" if args.snp else "soma"
 
 
-    exp_name = f"{modality}_{datetime.now().strftime('%Y%m%d_%H%M')}"
+    exp_name = f"{modality}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
     OUTDIR = os.path.join(args.outdir, exp_name)
     ensure_dir(OUTDIR)
     for sub in ["data", "preds", "curves", "embeddings", "explanations", "ckpt"]:
@@ -760,7 +686,19 @@ def main():
     # ---------- Load assets ----------
     df_soma_train = load_soma_table(args.soma_train)
     df_soma_valid = load_soma_table(args.soma_valid)
-    feature_cols = [c for c in df_soma_train.columns if c.startswith("seq.")]
+    feature_cols = _soma.select_features(
+        df_soma_train.columns,
+        panel=args.soma_gene_csv if modality == "soma" and args.soma_norm == "geneset" else None,
+        match=args.soma_gene_match, prefix=args.soma_gene_prefix)
+    if modality == "soma" and len(feature_cols) < 5:
+        raise ValueError("At least five matched Soma features are required.")
+    if modality == "soma":
+        (Path(OUTDIR) / "preprocessing.json").write_text(json.dumps({
+            "features": feature_cols,
+            "normalization": args.soma_gene_norm if args.soma_norm == "geneset" else args.soma_norm,
+            "panel_match": args.soma_gene_match, "seed": args.seed,
+            "grid_lr": args.grid_lr, "grid_bs": args.grid_bs,
+            "input_transform": args.soma_input_transform, "fit_scope": "training fold only"}, indent=2) + "\n")
     fundus_dict = load_fundus_dict(args.fundus_dir)
     ecg_dict = load_ecg_dict(args.ecg_dir)
     snp_df = load_snp_table(args.snp_prefix)
@@ -799,6 +737,7 @@ def main():
         pool_train = [p for p in has_soma if p not in shougang_ids and not is_all_four(p)]
         pool_test  = [p for p in has_soma if p in shougang_ids and  is_all_four(p)]
         pool_rest = [p for p in has_soma if p not in shougang_ids and is_all_four(p)]
+    pool_train, pool_test, pool_rest = sorted(pool_train), sorted(pool_test), sorted(pool_rest)
     safe_to_csv(pd.DataFrame({"pid": pool_train}), os.path.join(OUTDIR, "data", "train_pid_pool.csv"))
     safe_to_csv(pd.DataFrame({"pid": pool_test}), os.path.join(OUTDIR, "data", "test_pid_pool.csv"))
     safe_to_csv(pd.DataFrame({"pid": pool_rest}), os.path.join(OUTDIR, "data", "rest_pid_pool.csv"))
@@ -806,7 +745,7 @@ def main():
     summary_rows = []
 
     for endpoint in args.endpoints:
-        ranknorm_mode = args.soma_norm
+        ranknorm_mode = args.soma_gene_norm if args.soma_norm == "geneset" else args.soma_norm
         if endpoint not in ENDPOINTS:
             print(f"[WARN] Unknown endpoint {endpoint}, skip")
             continue
@@ -1057,7 +996,7 @@ def main():
                 df_tr_best = df_tr.iloc[folds[best_fold][0]].reset_index(drop=True)
                 ds_tr_best = ECGDataset(df_tr_best, args.ecg_dir)
                 if 'transformer' in model_tag:
-                    explain_integrated_gradients(best_model, make_loader(ds_tr_best,1, False), device,
+                    explain_integrated_gradients(best_model, make_loader(ds_te,1, False), device,
                                              os.path.join(OUTDIR, "explanations", f"{endpoint}_ecg_{model_tag}_best_IG.csv"),
                                              modality="ecg")
                 df_sum = pd.DataFrame(summary_rows)
@@ -1131,7 +1070,7 @@ def main():
 
             # IG for transformer
             ds_tr_best_for_ig = SNPDataset(df_tr_best_tr, snp_df, scaler=sc_best_tr)
-            explain_integrated_gradients(best_model_tr, make_loader(ds_tr_best_for_ig, int(best_bs_tr), False), device,
+            explain_integrated_gradients(best_model_tr, make_loader(ds_te_tr, int(best_bs_tr), False), device,
                                          os.path.join(OUTDIR, "explanations", f"{endpoint}_snp_TR_best_IG.csv"),
                                          feature_names=list(snp_df.columns), modality="snp")
 
@@ -1249,288 +1188,188 @@ def main():
 
             folds = fivefold_groups_balanced(df_tr)
 
-            # ===== (A) Transformer =====
-            results_tr = []
-            for k, (tr_idx, va_idx) in enumerate(folds):
-                df_tr_k_raw = df_tr.iloc[tr_idx].reset_index(drop=True)
-                df_va_k_raw = df_tr.iloc[va_idx].reset_index(drop=True)
-                gene_syms = []
-                if ranknorm_mode == "geneset":
-                    ranknorm_mode = "ranknorm"
-                    all_cols = set(df_soma_train.columns)
-                    print(list(all_cols)[:10],flush = True)
-                    gene_syms = pd.read_csv(args.soma_gene_csv)['Gene'].tolist()
-                    print(gene_syms[:10],flush=True)
-                if len(gene_syms) == 0:
-                    print(f"[WARN] Gene-subset skipped: empty gene list from {args.soma_gene_csv}")
-                else:
-                    feature_cols = [g for g in all_cols if len(g.split('.')) > 1 and g.split('.')[1] in gene_syms]
-                if len(feature_cols) < 5:
-                    print(f"[WARN] Gene-subset has too few matched features ({len(feature_cols)}). Skipped.")
-                else:
-                    print(f"[Gene-Subset] Using {len(feature_cols)} SOMA features from {args.soma_gene_csv}")
-                df_tr_k, scaler_k = apply_soma_norm_train(df_tr_k_raw, feature_cols, ranknorm_mode)
-                df_va_k = apply_soma_norm_test(df_va_k_raw, feature_cols, ranknorm_mode, scaler_k)
+            if 'transformer' in args.soma_models:
+                # ===== (A) Transformer =====
+                results_tr = []
+                for k, (tr_idx, va_idx) in enumerate(folds):
+                    df_tr_k_raw = df_tr.iloc[tr_idx].reset_index(drop=True)
+                    df_va_k_raw = df_tr.iloc[va_idx].reset_index(drop=True)
+                    df_tr_k, scaler_k = apply_soma_norm_train(df_tr_k_raw, feature_cols, ranknorm_mode)
+                    df_va_k = apply_soma_norm_test(df_va_k_raw, feature_cols, ranknorm_mode, scaler_k)
 
-                ds_tr_k = SomaDataset(df_tr_k, feature_cols)
-                ds_va_k = SomaDataset(df_va_k, feature_cols)
+                    ds_tr_k = SomaDataset(df_tr_k, feature_cols)
+                    ds_va_k = SomaDataset(df_va_k, feature_cols)
 
-                def build_model_tr():
-                    return SomaTokenTransformer(feature_cols, hidden_dim=128, nhead=4, nlayers=2)
-                for lr in args.grid_lr:
-                    for bs in args.grid_bs:
-                        tag = f"{endpoint}_soma_TR_fold{k}_{args.soma_norm}"
-                        best_ci, best_state = train_evaluate_one_setting(
-                            build_model_tr, ds_tr_k, ds_va_k, device, args.epochs, lr, bs,
-                            tag, OUTDIR, record_iter=True
-                        )
-                        results_tr.append((k, lr, bs, best_ci, best_state))
-                        if best_state is not None:
-                            torch.save(best_state, os.path.join(OUTDIR, "ckpt",
-                                        f"{tag}_lr{lr}_bs{bs}.pt"))
+                    def build_model_tr():
+                        return SomaTokenTransformer(feature_cols, hidden_dim=128, nhead=4, nlayers=2)
+                    for lr in args.grid_lr:
+                        for bs in args.grid_bs:
+                            tag = f"{endpoint}_soma_TR_fold{k}_{args.soma_norm}"
+                            best_ci, best_state = train_evaluate_one_setting(
+                                build_model_tr, ds_tr_k, ds_va_k, device, args.epochs, lr, bs,
+                                tag, OUTDIR, record_iter=True
+                            )
+                            results_tr.append((k, lr, bs, best_ci, best_state))
+                            if best_state is not None:
+                                torch.save(best_state, os.path.join(OUTDIR, "ckpt",
+                                            f"{tag}_lr{lr}_bs{bs}.pt"))
 
-            best_lr_tr, best_bs_tr, (best_fold_tr, _, _, best_ci_tr, best_state_tr) = \
-                select_best_setting_across_grid(results_tr)
+                best_lr_tr, best_bs_tr, (best_fold_tr, _, _, best_ci_tr, best_state_tr) = \
+                    select_best_setting_across_grid(results_tr)
+                save_soma_cv(results_tr, best_lr_tr, best_bs_tr, endpoint, 'Transformer',
+                             ranknorm_mode, len(feature_cols), args.seed, OUTDIR)
 
 
-            df_tr_best_raw_tr = df_tr.iloc[folds[best_fold_tr][0]].reset_index(drop=True)
-            df_tr_best_norm_tr, scaler_best_tr = apply_soma_norm_train(df_tr_best_raw_tr, feature_cols, ranknorm_mode)
-            df_te_norm_tr = apply_soma_norm_test(df_te, feature_cols, ranknorm_mode, scaler_best_tr)
-            ds_te_tr = SomaDataset(df_te_norm_tr, feature_cols)
-            best_model_tr = SomaTokenTransformer(feature_cols, hidden_dim=128, nhead=4, nlayers=2).to(device)
+                df_tr_best_raw_tr = df_tr.iloc[folds[best_fold_tr][0]].reset_index(drop=True)
+                df_tr_best_norm_tr, scaler_best_tr = apply_soma_norm_train(df_tr_best_raw_tr, feature_cols, ranknorm_mode)
+                df_te_norm_tr = apply_soma_norm_test(df_te, feature_cols, ranknorm_mode, scaler_best_tr)
+                ds_te_tr = SomaDataset(df_te_norm_tr, feature_cols)
+                best_model_tr = SomaTokenTransformer(feature_cols, hidden_dim=128, nhead=4, nlayers=2).to(device)
 
-            if best_state_tr is not None:
-                best_model_tr.load_state_dict(best_state_tr)
-            torch.save(best_model_tr.state_dict(), os.path.join(OUTDIR, "ckpt", f"{endpoint}_soma_TR_best.pt"))
+                if best_state_tr is not None:
+                    best_model_tr.load_state_dict(best_state_tr)
+                torch.save(best_model_tr.state_dict(), os.path.join(OUTDIR, "ckpt", f"{endpoint}_soma_TR_best.pt"))
+                joblib.dump({"features": feature_cols, "normalization": ranknorm_mode, "scaler": scaler_best_tr},
+                            os.path.join(OUTDIR, "ckpt", f"{endpoint}_soma_TR_preprocess.joblib"))
 
-            ci_te_tr, risk_te_tr, t_te_tr, e_te_tr, pid_te_tr, _ = evaluate_risk_and_embed(
-                best_model_tr, make_loader(ds_te_tr, int(best_bs_tr), False), device, need_embed=False)
-            save_pred_csv(OUTDIR, f"{endpoint}_soma_TR_test_best", pid_te_tr, risk_te_tr, t_te_tr, e_te_tr)
-            summary_rows.append({"endpoint": endpoint, "modality": "soma",
-                                 "model": f"transformer_{args.soma_norm}_h128_l2_lr{best_lr_tr}_bs{best_bs_tr}_fold{best_fold_tr}",
-                                 "test_cindex": ci_te_tr})
+                ci_te_tr, risk_te_tr, t_te_tr, e_te_tr, pid_te_tr, _ = evaluate_risk_and_embed(
+                    best_model_tr, make_loader(ds_te_tr, int(best_bs_tr), False), device, need_embed=False)
+                save_pred_csv(OUTDIR, f"{endpoint}_soma_TR_test_best", pid_te_tr, risk_te_tr, t_te_tr, e_te_tr)
+                summary_rows.append({"endpoint": endpoint, "modality": "soma", "normalization": ranknorm_mode, "n_features": len(feature_cols),
+                                     "model": f"transformer_{args.soma_norm}_h128_l2_lr{best_lr_tr}_bs{best_bs_tr}_fold{best_fold_tr}",
+                                     "test_cindex": ci_te_tr})
 
-            # IG（Transformer）
-            ds_tr_best_ig = SomaDataset(df_tr_best_norm_tr, feature_cols)
-            explain_integrated_gradients(best_model_tr, make_loader(ds_tr_best_ig, 4, False), device,
-                                         os.path.join(OUTDIR, "explanations", f"{endpoint}_soma_TR_best_IG.csv"),
-                                         feature_names=feature_cols, modality="soma")
+                # IG（Transformer）
+                ds_tr_best_ig = SomaDataset(df_tr_best_norm_tr, feature_cols)
+                explain_integrated_gradients(best_model_tr, make_loader(ds_te_tr, 4, False), device,
+                                             os.path.join(OUTDIR, "explanations", f"{endpoint}_soma_TR_best_IG.csv"),
+                                             feature_names=feature_cols, modality="soma")
 
-            # ===== (B) MLP + Cox =====
-            results_mlp = []
-            for k, (tr_idx, va_idx) in enumerate(folds):
-                df_tr_k_raw = df_tr.iloc[tr_idx].reset_index(drop=True)
-                df_va_k_raw = df_tr.iloc[va_idx].reset_index(drop=True)
+            if 'mlp' in args.soma_models:
+                # ===== (B) MLP + Cox =====
+                results_mlp = []
+                for k, (tr_idx, va_idx) in enumerate(folds):
+                    df_tr_k_raw = df_tr.iloc[tr_idx].reset_index(drop=True)
+                    df_va_k_raw = df_tr.iloc[va_idx].reset_index(drop=True)
 
-                df_tr_k, scaler_k = apply_soma_norm_train(df_tr_k_raw, feature_cols, ranknorm_mode)
-                df_va_k = apply_soma_norm_test(df_va_k_raw, feature_cols, ranknorm_mode, scaler_k)
+                    df_tr_k, scaler_k = apply_soma_norm_train(df_tr_k_raw, feature_cols, ranknorm_mode)
+                    df_va_k = apply_soma_norm_test(df_va_k_raw, feature_cols, ranknorm_mode, scaler_k)
 
-                ds_tr_k = SomaDataset(df_tr_k, feature_cols)
-                ds_va_k = SomaDataset(df_va_k, feature_cols)
+                    ds_tr_k = SomaDataset(df_tr_k, feature_cols)
+                    ds_va_k = SomaDataset(df_va_k, feature_cols)
 
-                def build_mlp_soma():
-                    return MLP_Cox(in_dim=len(feature_cols))
+                    def build_mlp_soma():
+                        return MLP_Cox(in_dim=len(feature_cols))
 
-                for lr in args.grid_lr:
-                    for bs in args.grid_bs:
-                        tag = f"{endpoint}_soma_MLP_fold{k}_{args.soma_norm}"
-                        best_ci, best_state = train_evaluate_one_setting(
-                            build_mlp_soma, ds_tr_k, ds_va_k, device, args.epochs, lr, bs,
-                            tag, OUTDIR, record_iter=True
-                        )
-                        results_mlp.append((k, lr, bs, best_ci, best_state))
-                        if best_state is not None:
-                            torch.save(best_state, os.path.join(OUTDIR, "ckpt",
-                                        f"{tag}_lr{lr}_bs{bs}.pt"))
+                    for lr in args.grid_lr:
+                        for bs in args.grid_bs:
+                            tag = f"{endpoint}_soma_MLP_fold{k}_{args.soma_norm}"
+                            best_ci, best_state = train_evaluate_one_setting(
+                                build_mlp_soma, ds_tr_k, ds_va_k, device, args.epochs, lr, bs,
+                                tag, OUTDIR, record_iter=True
+                            )
+                            results_mlp.append((k, lr, bs, best_ci, best_state))
+                            if best_state is not None:
+                                torch.save(best_state, os.path.join(OUTDIR, "ckpt",
+                                            f"{tag}_lr{lr}_bs{bs}.pt"))
 
-            best_lr_mlp, best_bs_mlp, (best_fold_mlp, _, _, best_ci_mlp, best_state_mlp) = \
-                select_best_setting_across_grid(results_mlp)
+                best_lr_mlp, best_bs_mlp, (best_fold_mlp, _, _, best_ci_mlp, best_state_mlp) = \
+                    select_best_setting_across_grid(results_mlp)
+                save_soma_cv(results_mlp, best_lr_mlp, best_bs_mlp, endpoint, 'MLP-Cox',
+                             ranknorm_mode, len(feature_cols), args.seed, OUTDIR)
 
-            df_tr_best_raw_mlp = df_tr.iloc[folds[best_fold_mlp][0]].reset_index(drop=True)
-            df_tr_best_norm_mlp, scaler_best_mlp = apply_soma_norm_train(df_tr_best_raw_mlp, feature_cols, ranknorm_mode)
-            df_te_norm_mlp = apply_soma_norm_test(df_te, feature_cols, ranknorm_mode, scaler_best_mlp)
-            ds_te_mlp = SomaDataset(df_te_norm_mlp, feature_cols)
+                df_tr_best_raw_mlp = df_tr.iloc[folds[best_fold_mlp][0]].reset_index(drop=True)
+                df_tr_best_norm_mlp, scaler_best_mlp = apply_soma_norm_train(df_tr_best_raw_mlp, feature_cols, ranknorm_mode)
+                df_te_norm_mlp = apply_soma_norm_test(df_te, feature_cols, ranknorm_mode, scaler_best_mlp)
+                ds_te_mlp = SomaDataset(df_te_norm_mlp, feature_cols)
 
-            best_model_mlp = MLP_Cox(in_dim=len(feature_cols)).to(device)
-            if best_state_mlp is not None:
-                best_model_mlp.load_state_dict(best_state_mlp)
-            torch.save(best_model_mlp.state_dict(), os.path.join(OUTDIR, "ckpt", f"{endpoint}_soma_MLP_best.pt"))
+                best_model_mlp = MLP_Cox(in_dim=len(feature_cols)).to(device)
+                if best_state_mlp is not None:
+                    best_model_mlp.load_state_dict(best_state_mlp)
+                torch.save(best_model_mlp.state_dict(), os.path.join(OUTDIR, "ckpt", f"{endpoint}_soma_MLP_best.pt"))
+                joblib.dump({"features": feature_cols, "normalization": ranknorm_mode, "scaler": scaler_best_mlp},
+                            os.path.join(OUTDIR, "ckpt", f"{endpoint}_soma_MLP_preprocess.joblib"))
 
-            ci_te_mlp, risk_te_mlp, t_te_mlp, e_te_mlp, pid_te_mlp, _ = evaluate_risk_and_embed(
-                best_model_mlp, make_loader(ds_te_mlp, int(best_bs_mlp), False), device, need_embed=False)
-            save_pred_csv(OUTDIR, f"{endpoint}_soma_MLP_test_best", pid_te_mlp, risk_te_mlp, t_te_mlp, e_te_mlp)
-            summary_rows.append({"endpoint": endpoint, "modality": "soma",
-                                 "model": f"mlpcox_{args.soma_norm}_lr{best_lr_mlp}_bs{best_bs_mlp}_fold{best_fold_mlp}",
-                                 "test_cindex": ci_te_mlp})
+                ci_te_mlp, risk_te_mlp, t_te_mlp, e_te_mlp, pid_te_mlp, _ = evaluate_risk_and_embed(
+                    best_model_mlp, make_loader(ds_te_mlp, int(best_bs_mlp), False), device, need_embed=False)
+                save_pred_csv(OUTDIR, f"{endpoint}_soma_MLP_test_best", pid_te_mlp, risk_te_mlp, t_te_mlp, e_te_mlp)
+                summary_rows.append({"endpoint": endpoint, "modality": "soma", "normalization": ranknorm_mode, "n_features": len(feature_cols),
+                                     "model": f"mlpcox_{args.soma_norm}_lr{best_lr_mlp}_bs{best_bs_mlp}_fold{best_fold_mlp}",
+                                     "test_cindex": ci_te_mlp})
 
-            # ===== (C) PCA + Cox =====
-            class SomaPCADS(Dataset):
-                def __init__(self, df, X):
-                    self.df = df.reset_index(drop=True)
-                    self.X = X
-                def __len__(self): return len(self.df)
-                def __getitem__(self, i):
-                    r = self.df.iloc[i]
-                    return torch.tensor(self.X[i], dtype=torch.float32), \
-                           torch.tensor(r["adjusted_time"], dtype=torch.float32), \
-                           torch.tensor(r["event"], dtype=torch.int64), \
-                           r["pid"]
+            if 'pca' in args.soma_models:
+                # ===== (C) PCA + Cox =====
+                class SomaPCADS(Dataset):
+                    def __init__(self, df, X):
+                        self.df = df.reset_index(drop=True)
+                        self.X = X
+                    def __len__(self): return len(self.df)
+                    def __getitem__(self, i):
+                        r = self.df.iloc[i]
+                        return torch.tensor(self.X[i], dtype=torch.float32), \
+                               torch.tensor(r["adjusted_time"], dtype=torch.float32), \
+                               torch.tensor(r["event"], dtype=torch.int64), \
+                               r["pid"]
 
-            results_pca = []
-            pca_dim = 64
-            for k, (tr_idx, va_idx) in enumerate(folds):
-                df_tr_k_raw = df_tr.iloc[tr_idx].reset_index(drop=True)
-                df_va_k_raw = df_tr.iloc[va_idx].reset_index(drop=True)
+                results_pca = []
+                pca_dim = 64
+                for k, (tr_idx, va_idx) in enumerate(folds):
+                    df_tr_k_raw = df_tr.iloc[tr_idx].reset_index(drop=True)
+                    df_va_k_raw = df_tr.iloc[va_idx].reset_index(drop=True)
 
-                df_tr_k, scaler_k = apply_soma_norm_train(df_tr_k_raw.copy(), feature_cols, ranknorm_mode)
-                df_va_k = apply_soma_norm_test(df_va_k_raw.copy(), feature_cols, ranknorm_mode, scaler_k)
+                    df_tr_k, scaler_k = apply_soma_norm_train(df_tr_k_raw.copy(), feature_cols, ranknorm_mode)
+                    df_va_k = apply_soma_norm_test(df_va_k_raw.copy(), feature_cols, ranknorm_mode, scaler_k)
 
-                pca = PCA(n_components=pca_dim).fit(df_tr_k[feature_cols])
-                X_tr_pca = pca.transform(df_tr_k[feature_cols]).astype(np.float32)
-                X_va_pca = pca.transform(df_va_k[feature_cols]).astype(np.float32)
+                    pca = PCA(n_components=pca_dim).fit(df_tr_k[feature_cols])
+                    X_tr_pca = pca.transform(df_tr_k[feature_cols]).astype(np.float32)
+                    X_va_pca = pca.transform(df_va_k[feature_cols]).astype(np.float32)
 
-                ds_tr_pca = SomaPCADS(df_tr_k, X_tr_pca)
-                ds_va_pca = SomaPCADS(df_va_k, X_va_pca)
+                    ds_tr_pca = SomaPCADS(df_tr_k, X_tr_pca)
+                    ds_va_pca = SomaPCADS(df_va_k, X_va_pca)
 
-                def build_pca_soma():
-                    return PCA_Cox(pca_components=pca_dim)
+                    def build_pca_soma():
+                        return PCA_Cox(pca_components=pca_dim)
 
-                for lr in args.grid_lr:
-                    for bs in args.grid_bs:
-                        tag = f"{endpoint}_soma_PCA_fold{k}_{args.soma_norm}"
-                        best_ci, best_state = train_evaluate_one_setting(
-                            build_pca_soma, ds_tr_pca, ds_va_pca, device, args.epochs, lr, bs,
-                            tag, OUTDIR, record_iter=True
-                        )
-                        results_pca.append((k, lr, bs, best_ci, best_state))
-                        if best_state is not None:
-                            torch.save(best_state, os.path.join(OUTDIR, "ckpt",
-                                        f"{tag}_lr{lr}_bs{bs}.pt"))
+                    for lr in args.grid_lr:
+                        for bs in args.grid_bs:
+                            tag = f"{endpoint}_soma_PCA_fold{k}_{args.soma_norm}"
+                            best_ci, best_state = train_evaluate_one_setting(
+                                build_pca_soma, ds_tr_pca, ds_va_pca, device, args.epochs, lr, bs,
+                                tag, OUTDIR, record_iter=True
+                            )
+                            results_pca.append((k, lr, bs, best_ci, best_state))
+                            if best_state is not None:
+                                torch.save(best_state, os.path.join(OUTDIR, "ckpt",
+                                            f"{tag}_lr{lr}_bs{bs}.pt"))
 
-            best_lr_pca, best_bs_pca, (best_fold_pca, _, _, best_ci_pca, best_state_pca) = \
-                select_best_setting_across_grid(results_pca)
-
-
-            df_tr_best_raw_pca = df_tr.iloc[folds[best_fold_pca][0]].reset_index(drop=True)
-            df_tr_best_norm_pca, scaler_best_pca = apply_soma_norm_train(df_tr_best_raw_pca, feature_cols, ranknorm_mode)
-            pca_best = PCA(n_components=pca_dim).fit(df_tr_best_norm_pca[feature_cols])
-            df_te_norm_pca = apply_soma_norm_test(df_te.copy(), feature_cols, ranknorm_mode, scaler_best_pca)
-            X_te_pca = pca_best.transform(df_te_norm_pca[feature_cols]).astype(np.float32)
-            ds_te_pca = SomaPCADS(df_te_norm_pca, X_te_pca)
-            best_model_pca = PCA_Cox(pca_components=pca_dim).to(device)
-            if best_state_pca is not None:
-                best_model_pca.load_state_dict(best_state_pca)
-            torch.save(best_model_pca.state_dict(), os.path.join(OUTDIR, "ckpt", f"{endpoint}_soma_PCA_best.pt"))
-
-            ci_te_pca, risk_te_pca, t_te_pca, e_te_pca, pid_te_pca, _ = evaluate_risk_and_embed(
-                best_model_pca, make_loader(ds_te_pca, int(best_bs_pca), False), device, need_embed=False)
-            save_pred_csv(OUTDIR, f"{endpoint}_soma_PCA_test_best", pid_te_pca, risk_te_pca, t_te_pca, e_te_pca)
-            summary_rows.append({"endpoint": endpoint, "modality": "soma",
-                                 "model": f"pca{pca_dim}+cox_{args.soma_norm}_lr{best_lr_pca}_bs{best_bs_pca}_fold{best_fold_pca}",
-                                 "test_cindex": ci_te_pca})
-
-            # -------------------- SOMA Gene-Subset (Transformer only) --------------------
-
-            all_cols = set(df_soma_train.columns)
-            gene_syms = load_gene_list(args.soma_gene_csv)
-            if len(gene_syms) == 0:
-                print(f"[WARN] Gene-subset skipped: empty gene list from {args.soma_gene_csv}")
-            else:
-                feature_cols_gene = [f"{args.soma_gene_prefix}{g}" for g in gene_syms if f"{args.soma_gene_prefix}{g}" in all_cols]
-                if len(feature_cols_gene) < 5:
-                    print(f"[WARN] Gene-subset has too few matched features ({len(feature_cols_gene)}). Skipped.")
-                else:
-                    print(f"[Gene-Subset] Using {len(feature_cols_gene)} SOMA features from {args.soma_gene_csv}")
-                    # Fivefold with same normalization protocol (train-fit -> valid/test-transform)
-                    results_gene_tr = []
-                    for k, (tr_idx, va_idx) in enumerate(folds):
-                        df_tr_k_raw = df_tr.iloc[tr_idx].reset_index(drop=True)
-                        df_va_k_raw = df_tr.iloc[va_idx].reset_index(drop=True)
+                best_lr_pca, best_bs_pca, (best_fold_pca, _, _, best_ci_pca, best_state_pca) = \
+                    select_best_setting_across_grid(results_pca)
+                save_soma_cv(results_pca, best_lr_pca, best_bs_pca, endpoint, 'PCA-Cox',
+                             ranknorm_mode, len(feature_cols), args.seed, OUTDIR)
 
 
+                df_tr_best_raw_pca = df_tr.iloc[folds[best_fold_pca][0]].reset_index(drop=True)
+                df_tr_best_norm_pca, scaler_best_pca = apply_soma_norm_train(df_tr_best_raw_pca, feature_cols, ranknorm_mode)
+                pca_best = PCA(n_components=pca_dim).fit(df_tr_best_norm_pca[feature_cols])
+                df_te_norm_pca = apply_soma_norm_test(df_te.copy(), feature_cols, ranknorm_mode, scaler_best_pca)
+                X_te_pca = pca_best.transform(df_te_norm_pca[feature_cols]).astype(np.float32)
+                ds_te_pca = SomaPCADS(df_te_norm_pca, X_te_pca)
+                best_model_pca = PCA_Cox(pca_components=pca_dim).to(device)
+                if best_state_pca is not None:
+                    best_model_pca.load_state_dict(best_state_pca)
+                torch.save(best_model_pca.state_dict(), os.path.join(OUTDIR, "ckpt", f"{endpoint}_soma_PCA_best.pt"))
+                joblib.dump({"features": feature_cols, "normalization": ranknorm_mode, "scaler": scaler_best_pca, "pca": pca_best},
+                            os.path.join(OUTDIR, "ckpt", f"{endpoint}_soma_PCA_preprocess.joblib"))
 
-                        df_tr_k_use = df_tr_k_raw.copy()
-                        df_va_k_use = df_va_k_raw.copy()
+                ci_te_pca, risk_te_pca, t_te_pca, e_te_pca, pid_te_pca, _ = evaluate_risk_and_embed(
+                    best_model_pca, make_loader(ds_te_pca, int(best_bs_pca), False), device, need_embed=False)
+                save_pred_csv(OUTDIR, f"{endpoint}_soma_PCA_test_best", pid_te_pca, risk_te_pca, t_te_pca, e_te_pca)
+                summary_rows.append({"endpoint": endpoint, "modality": "soma", "normalization": ranknorm_mode, "n_features": len(feature_cols),
+                                     "model": f"pca{pca_dim}+cox_{args.soma_norm}_lr{best_lr_pca}_bs{best_bs_pca}_fold{best_fold_pca}",
+                                     "test_cindex": ci_te_pca})
 
+            continue
 
-                        df_tr_k_norm, scaler_k = apply_soma_norm_train(df_tr_k_use, feature_cols_gene, ranknorm_mode)
-                        df_va_k_norm = apply_soma_norm_test(df_va_k_use, feature_cols_gene, ranknorm_mode, scaler_k)
-
-                        class SomaGeneDataset(Dataset):
-                            def __init__(self, df, feature_cols):
-                                self.df = df.reset_index(drop=True)
-                                self.feature_cols = feature_cols
-                                self.X = self.df[feature_cols].values.astype(np.float32)
-                            def __len__(self): return len(self.df)
-                            def __getitem__(self, i):
-                                r = self.df.iloc[i]
-                                return (torch.tensor(self.X[i], dtype=torch.float32),
-                                        torch.tensor(r["adjusted_time"], dtype=torch.float32),
-                                        torch.tensor(r["event"], dtype=torch.int64),
-                                        r["pid"])
-
-                        ds_tr_k = SomaGeneDataset(df_tr_k_norm, feature_cols_gene)
-                        ds_va_k = SomaGeneDataset(df_va_k_norm, feature_cols_gene)
-
-                        def build_gene_tr():
-                            return SomaTokenTransformer(feature_cols_gene, hidden_dim=128, nhead=4, nlayers=2)
-                        for lr in args.grid_lr:
-                            for bs in args.grid_bs:
-                                tag = f"{endpoint}_somaGENE_TR_fold{k}_{args.soma_norm}"
-                                best_ci, best_state = train_evaluate_one_setting(
-                                    build_gene_tr, ds_tr_k, ds_va_k, device, args.epochs, lr, bs,
-                                    tag, OUTDIR, record_iter=True
-                                )
-                                results_gene_tr.append((k, lr, bs, best_ci, best_state))
-                                if best_state is not None:
-                                    torch.save(best_state, os.path.join(OUTDIR, "ckpt",
-                                                f"{tag}_lr{lr}_bs{bs}.pt"))
-
-
-                    best_lr_g, best_bs_g, (best_fold_g, _, _, best_ci_g, best_state_g) = \
-                        select_best_setting_across_grid(results_gene_tr)
-
-
-                    df_tr_best_raw_g = df_tr.iloc[folds[best_fold_g][0]].reset_index(drop=True)
-                    df_tr_best_norm_g, scaler_best_g = apply_soma_norm_train(df_tr_best_raw_g.copy(), feature_cols_gene, ranknorm_mode)
-                    df_te_norm_g = apply_soma_norm_test(df_te.copy(), feature_cols_gene, ranknorm_mode, scaler_best_g)
-                    class SomaGeneDatasetEval(Dataset):
-                        def __init__(self, df, feature_cols):
-                            self.df = df.reset_index(drop=True)
-                            self.feature_cols = feature_cols
-                            self.X = self.df[feature_cols].values.astype(np.float32)
-                        def __len__(self): return len(self.df)
-                        def __getitem__(self, i):
-                            r = self.df.iloc[i]
-                            return (torch.tensor(self.X[i], dtype=torch.float32),
-                                    torch.tensor(r["adjusted_time"], dtype=torch.float32),
-                                    torch.tensor(r["event"], dtype=torch.int64),
-                                    r["pid"])
-
-                    ds_te_g = SomaGeneDatasetEval(df_te_norm_g, feature_cols_gene)
-
-                    best_model_g = SomaTokenTransformer(feature_cols_gene, hidden_dim=128, nhead=4, nlayers=2).to(device)
-                    if best_state_g is not None:
-                        best_model_g.load_state_dict(best_state_g)
-                    torch.save(best_model_g.state_dict(), os.path.join(OUTDIR, "ckpt",
-                                f"{endpoint}_somaGENE_TR_best.pt"))
-
-                    ci_te_g, risk_te_g, t_te_g, e_te_g, pid_te_g, _ = evaluate_risk_and_embed(
-                        best_model_g, make_loader(ds_te_g, int(best_bs_g), False), device, need_embed=False)
-                    save_pred_csv(OUTDIR, f"{endpoint}_somaGENE_TR_test_best", pid_te_g, risk_te_g, t_te_g, e_te_g)
-                    summary_rows.append({"endpoint": endpoint, "modality": "soma",
-                                         "model": f"transformer_GENESUBSET_{args.soma_norm}_lr{best_lr_g}_bs{best_bs_g}_fold{best_fold_g}",
-                                         "test_cindex": ci_te_g})
-
-
-                    ds_tr_best_ig_g = SomaGeneDatasetEval(df_tr_best_norm_g, feature_cols_gene)
-                    explain_integrated_gradients(best_model_g, make_loader(ds_tr_best_ig_g, 4, False), device,
-                                                 os.path.join(OUTDIR, "explanations", f"{endpoint}_somaGENE_TR_best_IG.csv"),
-                                                 feature_names=feature_cols_gene, modality="soma")
-                    # Save summary
-                    df_sum = pd.DataFrame(summary_rows)
-                    safe_to_csv(df_sum, os.path.join(OUTDIR, "summary_test_cindex.csv"))
-                continue
     # Save summary
     df_sum = pd.DataFrame(summary_rows)
     safe_to_csv(df_sum, os.path.join(OUTDIR, "summary_test_cindex.csv"))

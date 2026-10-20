@@ -1,0 +1,19 @@
+{
+  "replicate_1": {
+    "source": "NCVR panel",
+    "matching": "gene symbol"
+  },
+  "replicate_2": {
+    "source": "Deng et al., Cell",
+    "matching": "gene symbol"
+  },
+  "svm": {
+    "source": "Union of features from five-fold SVM selection",
+    "matching": "complete assay feature name"
+  },
+  "cardio": {
+    "source": "Cardio panel supplied with the original code",
+    "matching": "gene symbol"
+  },
+  "counts": "Panel gene entries, matched assay features, and collapsed gene-level results are distinct units."
+}

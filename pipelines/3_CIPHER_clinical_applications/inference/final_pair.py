@@ -6,9 +6,9 @@ import joblib
 import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
-from pipelines.models.final_pair import FEATURES, load_pair, score, sha256
-from pipelines.inference.clinical_scores import SCORE_FEATURES, scores
-from pipelines.inference.prepared import safe_cindex, safe_event_auc, read_table
+from ..models.final_pair import FEATURES, load_pair, score, sha256
+from .clinical_scores import SCORE_FEATURES, scores
+from .prepared import safe_cindex, safe_event_auc, read_table
 
 LABELS = ['Framingham', 'CHINA-PAR', 'CKM2S2-BAG', 'Best event-based', 'Best risk-based']
 
@@ -120,7 +120,7 @@ def run(config_path, cohort):
         time, event = block.time.to_numpy(float), block.event.to_numpy(int)
         matrix = block[LABELS].to_numpy(float)
         point = evaluate(time, event, matrix)
-        reps = int(spec.get('bootstrap', 300))
+        reps = int(spec.get('bootstrap', 500))
         if reps < 0:
             raise ValueError('Bootstrap count must be nonnegative')
         raw = Parallel(n_jobs=int(spec.get('jobs', 1)))(delayed(replicate)(int(spec.get('seed', 20260923)) + i, time, event, matrix) for i in range(reps))
@@ -143,8 +143,8 @@ def run(config_path, cohort):
     output.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(rows).to_csv(output / 'aggregate_metrics.csv', index=False)
     pd.DataFrame(summaries).to_csv(output / 'aggregate_summary.csv', index=False)
-    safe_manifest = {'cohort': cohort, 'endpoint': 'ASCVD', 'models': [{'role': row['role'], 'sha256': row['sha256']} for row in model_manifest],
-                     'bootstrap': spec.get('bootstrap', 300), 'seed': spec.get('seed', 20260923), 'participant_outputs': False,
+    safe_manifest = {'cohort_description': spec.get('cohort_description', cohort), 'cohort': cohort, 'endpoint': 'ASCVD', 'models': [{'role': row['role'], 'sha256': row['sha256']} for row in model_manifest],
+                     'bootstrap': spec.get('bootstrap', 500), 'seed': spec.get('seed', 20260923), 'participant_outputs': False,
                      'reference_verified': bool(spec.get('reference_predictions'))}
     (output / 'run_manifest.json').write_text(json.dumps(safe_manifest, indent=2) + '\n')
     plot(pd.DataFrame(summaries), output, cohort)
@@ -177,7 +177,7 @@ def plot(summary, output, cohort):
 
 if __name__ == '__main__':
     p = argparse.ArgumentParser()
-    p.add_argument('--config', type=Path, default=Path('config/pipeline.local.json'))
+    p.add_argument('--config', type=Path, default=Path('pipeline.local.json'))
     p.add_argument('--cohort', choices=['UKB', 'MUCH'], required=True)
     args = p.parse_args()
     run(args.config, args.cohort)

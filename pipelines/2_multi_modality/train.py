@@ -2,6 +2,11 @@
 import warnings
 warnings.filterwarnings('ignore')
 import os, argparse, pickle
+import importlib, sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+_signals = importlib.import_module("pipelines.0_preprocess.imaging_ecg")
+from pipelines.metrics import event_auroc
 import numpy as np
 import pandas as pd
 from datetime import datetime
@@ -77,6 +82,7 @@ parser.add_argument("--label_csv", required=True)
 parser.add_argument("--soma_gene_csv", required=True)
 parser.add_argument("--endpoints", nargs="+", default=list(endpoints_dict))
 
+parser.add_argument("--fundus_normalization", choices=["imagenet", "half", "none"], default="imagenet")
 args = parser.parse_args()
 endpoints_dict = {ep: endpoints_dict[ep] for ep in args.endpoints}
 
@@ -128,29 +134,10 @@ def ensure_dir(p):
 def safe_to_csv(df, path):
     ensure_dir(os.path.dirname(path)); df.to_csv(path, index=False)
 
-def read_ecg_from_xml(f):
-    try:
-        tree = ET.parse(f); root = tree.getroot()
-        arr = []
-        for seq in root.findall(".//sequence"):
-            d = seq.find("value/digits")
-            if d is not None and d.text:
-                arr.append(list(map(int, d.text.split())))
-        arr = arr[:12]
-        if len(arr) == 0:
-            return np.zeros((1000,12))
-        L = min(len(a) for a in arr)
-        mat = np.array([a[:L] for a in arr]).T[:1000]
-        out = np.zeros((1000,12), dtype=float); out[:mat.shape[0]] = mat
-        return out
-    except:
-        return np.zeros((1000,12))
+def read_ecg_from_xml(path):
+    return _signals.read_ecg(path, length=1000, normalization="none")
 
-# ==================== Dataset ====================
-transform = transforms.Compose([
-    transforms.Resize((224,224)),
-    transforms.ToTensor(),
-])
+transform = _signals.fundus_transform(224, args.fundus_normalization)
 
 class MultiModalDataset(Dataset):
     def __init__(self, df, snp_df, fundus_dict, feat, preload=True):
@@ -241,7 +228,6 @@ df_label = df_label[df_label["ID"].apply(all_four)].copy()
 
 # ==================== IG helpers ====================
 def build_baselines(batch):
-    """Analysis helper. Inputs and outputs follow the function implementation."""
     img, snp, soma, ecg, _, _, _ = batch
     baselines = []
     inputs = []
@@ -264,7 +250,6 @@ def build_baselines(batch):
     return tuple(inputs), tuple(baselines)
 
 def forward_multimodal_for_ig(model, batch):
-    """Analysis helper. Inputs and outputs follow the function implementation."""
 
     def make_placeholder_like(x):
 
@@ -290,7 +275,6 @@ def forward_multimodal_for_ig(model, batch):
     return fn
 
 def run_ig_over_loader(model, loader, endpoint_dir, feature_cols, ig_steps=32, internal_bs=None):
-    """Analysis helper. Inputs and outputs follow the function implementation."""
     model.eval()
 
 
@@ -384,7 +368,6 @@ def run_ig_over_loader(model, loader, endpoint_dir, feature_cols, ig_steps=32, i
 # ==================== Embedding extraction ====================
 @torch.no_grad()
 def extract_embeddings(model, loader, endpoint_dir):
-    """Analysis helper. Inputs and outputs follow the function implementation."""
     model.eval()
     emb_fundus = []; emb_snp = []; emb_soma = []; emb_ecg = []; emb_fused = []
     pids = []
@@ -558,6 +541,8 @@ def main():
         model.load_state_dict(torch.load(best_ckpt, map_location=device))
 
         PID, R, T, E = predict(model, te_loader, device)
+        safe_to_csv(pd.DataFrame([{"endpoint": endpoint, "n": len(E), "events": int(np.asarray(E).sum()),
+                                  "event_auroc": event_auroc(np.asarray(E), np.asarray(R))}]), os.path.join(ep_dir, "test", "event_metrics.csv"))
         test_ci = concordance_index(np.asarray(T), -np.asarray(R), np.asarray(E))
         safe_to_csv(pd.DataFrame({"ID":PID, "risk":R, "time":T, "event":E}), os.path.join(ep_dir, "test", "risk_test.csv"))
 
