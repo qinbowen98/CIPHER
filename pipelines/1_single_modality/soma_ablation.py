@@ -48,7 +48,7 @@ def commands(cfg, config_path):
         raise ValueError('Seeds must be nonempty and unique.')
     for seed in seeds:
         for name, arguments in conditions:
-            output = resolve(cfg.get('training_output', '../private_runs/training')) / 'soma_ablation' / name / ('seed' + str(seed))
+            output = resolve(cfg.get('training_output', 'private_runs/training')) / 'soma_ablation' / name / ('seed' + str(seed))
             flags = {**data, **grid, **arguments, 'seed': seed, 'outdir': str(output)}
             command = [sys.executable, str(Path(__file__).with_name('train.py')), '--soma', *runner.flags(flags)]
             yield command, cwd, name, seed

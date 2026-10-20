@@ -45,7 +45,7 @@ import re
 # ==== PLINK ====
 from pandas_plink import read_plink
 
-# ==== Your models (keep as-is) ====
+# Model architectures
 from model import (
     TransformerModule,
     ECGTransformer,
@@ -179,19 +179,6 @@ def load_shougang_test_ids(cmcs_standard_csv):
         raise RuntimeError("Cannot find 'subcohort' column in CMCS standard CSV.")
     shougang = set(df[df["subcohort"] == 102][id_col].astype(str).tolist())
     return shougang
-'''
-def attach_time_event(df_pid, df_label, visit_map, visit_required=True):
-    df = df_pid.merge(df_label, on="pid", how="inner")
-    print('merge',df)
-    print(df_label['pid'][0])
-    print(df_pid['pid'][0])
-    if visit_required and "visit" not in df.columns:
-        df["visit"] = df["pid"].map(lambda x: visit_map.get(str(x), "02"))
-    df["offset"] = df["visit"].map(VISIT_OFFSET)
-    df["adjusted_time"] = df["time"] - df["offset"]
-    df = df[df["adjusted_time"] >= 0].copy()
-    return df
-'''
 def attach_time_event(df_pid,df_label,modality):
     df = df_pid.merge(df_label,on='pid',how='inner')
     if modality == 'soma':
@@ -286,7 +273,7 @@ class FundusDataset(Dataset):
 
         self.tf = _signals.fundus_transform(image_size, FUNDUS_NORMALIZATION)
 
-        # ---- NEW: preload images into memory ----
+        # Preload images
         self.cache_img = {}
         print(f"[Preload Fundus] {len(self.df)} samples.")
         for pid in self.df["pid"].unique():
@@ -322,7 +309,7 @@ class ECGDataset(Dataset):
         self.ecg_dir = ecg_dir
         self.max_len = max_len
 
-        # ---- NEW: preload ECG into memory ----
+        # Preload ECG
         self.cache_ecg = {}
         print(f"[Preload ECG] {len(self.df)} samples.")
         for pid in self.df["pid"].unique():
@@ -443,6 +430,67 @@ def train_evaluate_one_setting(model_builder,  # () -> nn.Module
     save_iter_losses(outdir, f"{tag_base}_lr{lr}_bs{bs}", it_losses)
     return best_ci, best_state
 
+def architecture_search(dataset_factory, builder, folds, args, device, outdir, tag, layers=None):
+    records = []
+    for fold, indices in enumerate(folds):
+        training, validation = dataset_factory(*indices)
+        for hidden in args.grid_hidden:
+            for depth in (args.grid_layers if layers is None else layers):
+                for lr in args.grid_lr:
+                    for batch_size in args.grid_bs:
+                        name = f"{tag}_h{hidden}_l{depth}_fold{fold}"
+                        ci, state = train_evaluate_one_setting(
+                            lambda: builder(hidden, depth), training, validation, device,
+                            args.epochs, lr, batch_size, name, outdir, record_iter=True)
+                        if state is None or not np.isfinite(ci):
+                            raise ValueError("Architecture search requires a finite validation score and checkpoint.")
+                        checkpoint = Path(outdir) / "ckpt" / f"{name}_lr{lr}_bs{batch_size}.pt"
+                        torch.save(state, checkpoint)
+                        records.append({"fold": fold, "hidden_dim": hidden, "layers": depth,
+                                        "lr": lr, "batch_size": batch_size, "valid_cindex": ci,
+                                        "checkpoint": checkpoint.name})
+                        del state
+    frame = pd.DataFrame(records)
+    keys = ["hidden_dim", "layers", "lr", "batch_size"]
+    selected = frame.groupby(keys, as_index=False).valid_cindex.mean().sort_values(
+        ["valid_cindex", *keys], ascending=[False, True, True, True, True]).iloc[0]
+    mask = np.ones(len(frame), dtype=bool)
+    for key in keys:
+        mask &= frame[key].eq(selected[key]).to_numpy()
+    chosen = frame.loc[mask].copy()
+    if len(chosen) != len(folds) or chosen.fold.nunique() != len(folds):
+        raise ValueError("Selected architecture must include every validation fold.")
+    best = chosen.sort_values(["valid_cindex", "fold"], ascending=[False, True]).iloc[0]
+    result = {"hidden_dim": int(selected.hidden_dim), "layers": int(selected.layers),
+              "lr": float(selected.lr), "batch_size": int(selected.batch_size),
+              "fold": int(best.fold), "mean_valid_cindex": float(selected.valid_cindex),
+              "best_fold_cindex": float(best.valid_cindex)}
+    frame.to_csv(Path(outdir) / (tag + "_architecture_cv.csv"), index=False)
+    (Path(outdir) / (tag + "_selected.json")).write_text(json.dumps(result, indent=2) + "\n")
+    state = torch.load(Path(outdir) / "ckpt" / best.checkpoint, map_location="cpu")
+    return result, state, chosen
+
+
+class SNPTransformerCox(nn.Module):
+    def __init__(self, features, hidden, layers):
+        super().__init__()
+        self.enc = TransformerModule(features, hidden_dim=hidden, nhead=4, nlayers=layers)
+        self.head = nn.Linear(hidden, 1)
+
+    def forward(self, x):
+        return self.head(self.enc(x)).squeeze(-1)
+
+
+class ECGTransformerCox(nn.Module):
+    def __init__(self, hidden, layers):
+        super().__init__()
+        self.backbone = ECGTransformer(input_dim=12, hidden_dim=hidden, nhead=4, nlayers=layers)
+        self.head = nn.Linear(hidden, 1)
+
+    def forward(self, x):
+        return self.head(self.backbone(x)).squeeze(-1)
+
+
 def select_best_setting_across_grid(results_list):
     # results_list: [(fold_id, lr, bs, best_ci, best_state), ...]
 
@@ -464,6 +512,11 @@ def explain_integrated_gradients(model, loader, device, out_csv, feature_names=N
     batches = output.with_suffix("").with_name(output.stem + "_per_sample")
     batches.mkdir(parents=True, exist_ok=False)
     total, count, records = None, 0, []
+    input_csv = output.with_name(output.stem + "_input.csv")
+    legacy_ecg = output.parent / (output.stem.replace("_best_IG", "") + "_ig_ecg_per_sample")
+    if modality == "ecg":
+        legacy_ecg.mkdir(exist_ok=False)
+    csv_header = True
     for index, (x, time, event, pid) in enumerate(loader):
         x = x.to(device)
         attr = ig.attribute(inputs=x, baselines=torch.zeros_like(x), target=None)
@@ -475,6 +528,23 @@ def explain_integrated_gradients(model, loader, device, out_csv, feature_names=N
         target = batches / ("batch_%06d.npz" % index)
         np.savez_compressed(target, pid=identifiers, attribution=values, inputs=inputs,
                             time=time.detach().cpu().numpy(), event=event.detach().cpu().numpy())
+        if modality in ("snp", "soma", "tabular"):
+            names = feature_names if feature_names is not None else ["f%d" % i for i in range(values.shape[1])]
+            if len(names) != values.shape[1]:
+                raise ValueError("Feature names must match the attribution axis.")
+            for row, identifier in enumerate(identifiers):
+                attribution = pd.DataFrame({"pid": identifier, "feature": names,
+                                            "ig": values[row], "ig_abs": np.abs(values[row])})
+                input_values = pd.DataFrame({"pid": identifier, "feature": names,
+                                             "input_value": inputs[row], "ig_abs": inputs[row]})
+                attribution.to_csv(output, mode="w" if csv_header else "a", header=csv_header, index=False)
+                input_values.to_csv(input_csv, mode="w" if csv_header else "a", header=csv_header, index=False)
+                csv_header = False
+        elif modality == "ecg":
+            for row, identifier in enumerate(identifiers):
+                if not identifier or Path(identifier).name != identifier:
+                    raise ValueError("ECG sample identifiers must be valid file names.")
+                np.savetxt(legacy_ecg / (identifier + "_ig_ecg.txt"), np.abs(values[row]))
         summed = np.abs(values).sum(axis=0, dtype=np.float64)
         total = summed if total is None else total + summed
         count += len(values)
@@ -484,13 +554,15 @@ def explain_integrated_gradients(model, loader, device, out_csv, feature_names=N
     mean_attr = total / count
     if modality in ("snp", "soma", "tabular"):
         names = feature_names if feature_names is not None else ["f%d" % i for i in range(len(mean_attr))]
-        pd.DataFrame({"feature": names, "importance": mean_attr}).to_csv(output, index=False)
+        pd.DataFrame({"feature": names, "importance": mean_attr}).to_csv(output.with_name(output.stem + "_mean_absolute.csv"), index=False)
     else:
         np.save(output.with_suffix(".npy"), mean_attr)
     (batches / "manifest.json").write_text(json.dumps({
         "n_samples": count, "modality": modality, "features": feature_names,
         "split": "external_evaluation", "baseline": "zero in model-input space",
         "attribution": "signed integrated gradients", "participant_outputs": True,
+        "legacy_ig_csv": "ig_abs is absolute attribution",
+        "legacy_input_csv": "input_value and legacy ig_abs contain model input values",
         "batches": records}, indent=2) + "\n")
 
 class VitGradCAM:
@@ -523,55 +595,7 @@ def explain_vit_gradcam(vit_model, loader,device, outdir, endpoint):
         cam = gradcam.generate_cam()[0].detach().cpu().numpy()
         cam_2d = cam.reshape(14, 14)  # for vit_small_patch16_224
         np.savetxt(os.path.join(outdir, f"gradcam_{cnt}_{pid[0]}_{endpoint}.txt"), cam_2d, fmt="%.6f")
-'''
-class VitGradCAM:
-    def __init__(self, vit_block):
-        self.activation = None
-        self.gradients = None
-        vit_block.register_forward_hook(self.save_activation)
-        vit_block.register_backward_hook(self.save_gradient)
-    def save_activation(self, module, input, output):
-        self.activation = output
-    def save_gradient(self, module, grad_input, grad_output):
-        self.gradients = grad_output[0]
-    def generate_cam(self):
-        weights = self.gradients.mean(dim=1, keepdim=True)
-        cam = (weights * self.activation).sum(dim=-1)  # (B, Tokens)
-        cam = cam[:, 1:]  # drop CLS
-        return cam
-'''
 """Write mean absolute integrated gradients to the protected run directory."""
-'''
-def explain_vit_gradcam(model, loader, device, outdir , endpoint):
-    gradcam = VitGradCAM(model.fundus_enc.blocks[-1], model.fundus_enc.blocks[-1])
-    samples = []
-    for batch in loader:
-        samples.append(batch)
-        if len(samples) >= 10: break
-
-    for i, (img, snp, soma, ecg, t, e, pid) in enumerate(samples):
-        img, snp, soma, ecg = img.to(device), snp.to(device), soma.to(device), ecg.to(device)
-        #img.requires_grad = True
-        img_disp = img[0] if img.dim() == 4 and img.shape[0] == 1 else img
-        sample_id = pid[0] if isinstance(pid,(list,tuple,np.ndarray)) else pid
-        orig_img = to_pil_image((img_disp.cpu() * 0.5 + 0.5))
-        orig_path = os.path.join(outdir,f"{i}_{pid[0]}_orig.png")
-        orig_img.save(orig_path)
-
-        risk = model(img, snp, soma, ecg)
-        risk.mean().backward()
-        cam = gradcam.generate_cam().detach().cpu().numpy()
-        #print('cam',cam.shape)
-        cam = gradcam.generate_cam()[0].detach().cpu().numpy()
-        #print('cam',cam.shape)
-        #plt.imshow(to_pil_image((img[0]*0.5+0.5).cpu()))
-        plt.imshow(cam.reshape(14,14), cmap='jet', alpha=0.5)
-        plt.axis('off')
-        plt.savefig(f"{outdir}/gradcam_{i}_{pid[0]}_{endpoint}.png")
-        plt.close()
-        cam_2d = cam.reshape(14,14)
-        np.savetxt(f"{outdir}/gradcam_{i}_{pid[0]}_{endpoint}.txt",cam,fmt="%.6f")
-'''
 def fivefold_groups_balanced(df):
     pid_event = df.groupby("pid")["event"].max()  # (pid → 0/1)
     pids = pid_event.index.values
@@ -660,6 +684,8 @@ def main():
                         help="Prefix of SOMA feature columns (default 'seq.' so 'seq.GENE')")
     parser.add_argument("--fundus_normalization", choices=["imagenet", "half", "none"], default="imagenet")
     parser.add_argument("--soma_input_transform", choices=["raw", "log1p"], default="log1p")
+    parser.add_argument("--grid_hidden", type=int, nargs="+", default=[64, 128, 256])
+    parser.add_argument("--grid_layers", type=int, nargs="+", default=[1, 2, 3])
     args = parser.parse_args()
     global FUNDUS_NORMALIZATION
     FUNDUS_NORMALIZATION = args.fundus_normalization
@@ -846,7 +872,7 @@ def main():
             summary_rows.append({"endpoint": endpoint, "modality": "fundus", "model": f"vit_small_freeze_lr{best_lr}_bs{best_bs}_fold{best_fold}", "test_cindex": ci_te})
             df_tr_best = df_tr_f.iloc[folds[best_fold][0]].reset_index(drop=True)
             ds_tr_best = FundusDataset(df_tr_best, fundus_dict)
-            #explain_vit_gradcam(best_model, make_loader(ds_tr_best, 1, False),device,os.path.join(OUTDIR, "explanations"), endpoint)
+            #explain_vit_gradcam(best_model, make_loader(ds_te, 1, False),device,os.path.join(OUTDIR, "explanations"), endpoint)
             # -------------------- (C) ViT small finetune --------------------
             def build_vit_tune():
                 m = ViTHeadModel("vit_small_patch16_224", freeze=False).to(device)
@@ -873,7 +899,7 @@ def main():
             df_tr_best = df_tr_f.iloc[folds[best_fold][0]].reset_index(drop=True)
             ds_tr_best = FundusDataset(df_tr_best, fundus_dict)
 
-            explain_vit_gradcam(best_model, make_loader(ds_tr_best, 1, False),device,
+            explain_vit_gradcam(best_model, make_loader(ds_te, 1, False),device,
                                 os.path.join(OUTDIR, "explanations"), endpoint)
 
             # -------------------- (D) RetFound 2048 MLP --------------------
@@ -915,164 +941,63 @@ def main():
         # -------------------- ECG / SNP / SOMA: 5-fold CV (grid over lr, bs) --------------------
         # Build base tables for modality
         if modality == "ecg":
-
             folds = fivefold_groups_balanced(df_tr)
-
-
-            def build_transformer():
-                class CoxHead(nn.Module):
-                    def __init__(self, in_dim):
-                        super().__init__()
-                        self.head = nn.Linear(in_dim, 1)
-                    def forward(self, h):
-                        return self.head(h).squeeze(-1)
-                backbone = ECGTransformer(input_dim=12, hidden_dim=128, nhead=4, nlayers=3)
-                head = CoxHead(128)
-                class ECGWithHead(nn.Module):
-                    def __init__(self, enc, head):
-                        super().__init__()
-                        self.backbone = enc
-                        self.cox = head
-                    def forward(self, x):
-                        h = self.backbone(x)
-                        return self.cox(h)
-                return ECGWithHead(backbone, head)
-
-            def build_bilstm():
-                return BiLSTM_Cox()
-
-            def build_cnn():
-                return CNN1D_TextCox()
-
-            benchmark_models = {
-                "transformer_h256_l3": build_transformer,
-                "bilstm": build_bilstm,
-                "cnn1d": build_cnn
-            }
-
-            for model_tag, builder in benchmark_models.items():
-                print(f"\n===== ECG 5-Fold Benchmarking: {model_tag} =====")
-                results_grid = []  # (fold, lr, bs, best_ci, best_state)
-
-                for k, (tr_idx, va_idx) in enumerate(folds):
-                    df_tr_k = df_tr.iloc[tr_idx].reset_index(drop=True)
-                    df_va_k = df_tr.iloc[va_idx].reset_index(drop=True)
-                    ds_tr_k = ECGDataset(df_tr_k, args.ecg_dir)
-                    ds_va_k = ECGDataset(df_va_k, args.ecg_dir)
-
-                    for lr in args.grid_lr:
-                        for bs in args.grid_bs:
-                            tag = f"{endpoint}_ecg_{model_tag}_fold{k}"
-                            best_ci, best_state = train_evaluate_one_setting(
-                                builder, ds_tr_k, ds_va_k, device, args.epochs, lr, bs,
-                                tag, OUTDIR, record_iter=True
-                            )
-                            results_grid.append((k, lr, bs, best_ci, best_state))
-                            if best_state is not None:
-                                torch.save(best_state, os.path.join(OUTDIR, "ckpt", f"{tag}_lr{lr}_bs{bs}.pt"))
-
-
-                best_lr, best_bs, (best_fold, _, _, best_ci, best_state) = select_best_setting_across_grid(results_grid)
-
-
-                best_model = builder().to(device)
-                if best_state is not None:
-                    best_model.load_state_dict(best_state)
-                torch.save(best_model.state_dict(), os.path.join(OUTDIR, "ckpt", f"{endpoint}_ecg_{model_tag}_best.pt"))
-
-
+            def datasets(tr_indices, va_indices):
+                return (ECGDataset(df_tr.iloc[tr_indices], args.ecg_dir),
+                        ECGDataset(df_tr.iloc[va_indices], args.ecg_dir))
+            builders = {
+                "transformer": lambda hidden, depth: ECGTransformerCox(hidden, depth),
+                "bilstm": lambda hidden, depth: BiLSTM_Cox(hidden=hidden, num_layers=depth),
+                "cnn1d": lambda hidden, depth: CNN1D_TextCox(num_filters=hidden)}
+            for family, builder in builders.items():
+                selected, state, _ = architecture_search(
+                    datasets, builder, folds, args, device, OUTDIR, f"{endpoint}_ecg_{family}",
+                    layers=[1] if family == "cnn1d" else None)
+                model_tag = f"{family}_h{selected['hidden_dim']}_l{selected['layers']}"
+                best_model = builder(selected['hidden_dim'], selected['layers']).to(device)
+                best_model.load_state_dict(state)
+                torch.save(state, Path(OUTDIR) / "ckpt" / f"{endpoint}_ecg_{model_tag}_best.pt")
                 ds_te = ECGDataset(df_te, args.ecg_dir)
-                ci_te, risk_te, t_te, e_te, pid_te, _ = evaluate_risk_and_embed(
-                    best_model, make_loader(ds_te, int(best_bs), False), device, need_embed=False)
-                save_pred_csv(OUTDIR, f"{endpoint}_ecg_{model_tag}_test_best", pid_te, risk_te, t_te, e_te)
-
-                summary_rows.append({
-                    "endpoint": endpoint, "modality": "ecg",
-                    "model": f"{model_tag}_lr{best_lr}_bs{best_bs}_fold{best_fold}",
-                    "test_cindex": ci_te
-                })
-
-
-                df_tr_best = df_tr.iloc[folds[best_fold][0]].reset_index(drop=True)
-                ds_tr_best = ECGDataset(df_tr_best, args.ecg_dir)
-                if 'transformer' in model_tag:
-                    explain_integrated_gradients(best_model, make_loader(ds_te,1, False), device,
-                                             os.path.join(OUTDIR, "explanations", f"{endpoint}_ecg_{model_tag}_best_IG.csv"),
-                                             modality="ecg")
-                df_sum = pd.DataFrame(summary_rows)
-                safe_to_csv(df_sum, os.path.join(OUTDIR, "summary_test_cindex.csv"))
+                ci, risk, time, event, pids, _ = evaluate_risk_and_embed(
+                    best_model, make_loader(ds_te, selected['batch_size'], False), device)
+                save_pred_csv(OUTDIR, f"{endpoint}_ecg_{model_tag}_test_best", pids, risk, time, event)
+                summary_rows.append({"endpoint": endpoint, "modality": "ecg", "model": model_tag,
+                                     **selected, "test_cindex": ci})
+                if family == "transformer":
+                    explain_integrated_gradients(best_model, make_loader(ds_te, 1, False), device,
+                        str(Path(OUTDIR) / "explanations" / f"{endpoint}_ecg_{model_tag}_best_IG.csv"), modality="ecg")
+            safe_to_csv(pd.DataFrame(summary_rows), os.path.join(OUTDIR, "summary_test_cindex.csv"))
             continue
         if modality == "snp":
 
             folds = fivefold_groups_balanced(df_tr)
 
-            # ===== (A) Transformer =====
-            results_tr = []
-            for k, (tr_idx, va_idx) in enumerate(folds):
-                df_tr_k = df_tr.iloc[tr_idx].reset_index(drop=True)
-                df_va_k = df_tr.iloc[va_idx].reset_index(drop=True)
-
-                sc = StandardScaler().fit(snp_df.loc[df_tr_k["pid"]].values)
-                ds_tr_k = SNPDataset(df_tr_k, snp_df, scaler=sc)
-                ds_va_k = SNPDataset(df_va_k, snp_df, scaler=sc)
-                snptype_dim = snp_df.shape[1]
-
-                def build_model_tr():
-                    class SNPModel(nn.Module):
-                        def __init__(self, in_dim=snptype_dim, hd=128, nl=4):
-                            super().__init__()
-                            self.enc = TransformerModule(in_dim, hidden_dim=hd, nhead=4, nlayers=nl)
-                            self.head = nn.Linear(hd, 1)
-                        def forward(self, x):
-                            h = self.enc(x)
-                            return self.head(h).squeeze(-1)
-                    return SNPModel()
-
-                for lr in args.grid_lr:
-                    for bs in args.grid_bs:
-                        tag = f"{endpoint}_snp_TR_fold{k}"
-                        best_ci, best_state = train_evaluate_one_setting(
-                            build_model_tr, ds_tr_k, ds_va_k, device, args.epochs, lr, bs,
-                            tag, OUTDIR, record_iter=True
-                        )
-                        results_tr.append((k, lr, bs, best_ci, best_state))
-                        if best_state is not None:
-                            torch.save(best_state, os.path.join(OUTDIR, "ckpt",
-                                        f"{tag}_lr{lr}_bs{bs}.pt"))
-
-            best_lr_tr, best_bs_tr, (best_fold_tr, _, _, best_ci_tr, best_state_tr) = \
-                select_best_setting_across_grid(results_tr)
-
+            def snp_datasets(tr_indices, va_indices):
+                training = df_tr.iloc[tr_indices].reset_index(drop=True)
+                validation = df_tr.iloc[va_indices].reset_index(drop=True)
+                scaler = StandardScaler().fit(snp_df.loc[training.pid].values)
+                return SNPDataset(training, snp_df, scaler), SNPDataset(validation, snp_df, scaler)
+            selected, best_state_tr, _ = architecture_search(
+                snp_datasets, lambda hidden, depth: SNPTransformerCox(snp_df.shape[1], hidden, depth),
+                folds, args, device, OUTDIR, f"{endpoint}_snp_TR")
+            best_lr_tr, best_bs_tr, best_fold_tr = selected['lr'], selected['batch_size'], selected['fold']
             df_tr_best_tr = df_tr.iloc[folds[best_fold_tr][0]].reset_index(drop=True)
-            sc_best_tr = StandardScaler().fit(snp_df.loc[df_tr_best_tr["pid"]].values)
-            ds_te_tr = SNPDataset(df_te, snp_df, scaler=sc_best_tr)
-
-            class FinalSNP_TR(nn.Module):
-                def __init__(self, in_dim=snp_df.shape[1], hd=128, nl=4):
-                    super().__init__()
-                    self.enc = TransformerModule(in_dim, hidden_dim=hd, nhead=4, nlayers=nl)
-                    self.head = nn.Linear(hd, 1)
-                def forward(self, x):
-                    h = self.enc(x)
-                    return self.head(h).squeeze(-1)
-
-            best_model_tr = FinalSNP_TR().to(device)
-            if best_state_tr is not None:
-                best_model_tr.load_state_dict(best_state_tr)
-            torch.save(best_model_tr.state_dict(), os.path.join(OUTDIR, "ckpt", f"{endpoint}_snp_TR_best.pt"))
-
+            sc_best_tr = StandardScaler().fit(snp_df.loc[df_tr_best_tr.pid].values)
+            ds_te_tr = SNPDataset(df_te, snp_df, sc_best_tr)
+            best_model_tr = SNPTransformerCox(snp_df.shape[1], selected['hidden_dim'], selected['layers']).to(device)
+            best_model_tr.load_state_dict(best_state_tr)
+            torch.save(best_state_tr, Path(OUTDIR) / "ckpt" / f"{endpoint}_snp_TR_best.pt")
+            joblib.dump({"features": list(snp_df.columns), "scaler": sc_best_tr},
+                        Path(OUTDIR) / "ckpt" / f"{endpoint}_snp_TR_preprocess.joblib")
             ci_te_tr, risk_te_tr, t_te_tr, e_te_tr, pid_te_tr, _ = evaluate_risk_and_embed(
-                best_model_tr, make_loader(ds_te_tr, int(best_bs_tr), False), device, need_embed=False)
+                best_model_tr, make_loader(ds_te_tr, best_bs_tr, False), device)
             save_pred_csv(OUTDIR, f"{endpoint}_snp_TR_test_best", pid_te_tr, risk_te_tr, t_te_tr, e_te_tr)
             summary_rows.append({"endpoint": endpoint, "modality": "snp",
-                                 "model": f"transformer_h256_l4_lr{best_lr_tr}_bs{best_bs_tr}_fold{best_fold_tr}",
-                                 "test_cindex": ci_te_tr})
-
-            # IG for transformer
-            ds_tr_best_for_ig = SNPDataset(df_tr_best_tr, snp_df, scaler=sc_best_tr)
-            explain_integrated_gradients(best_model_tr, make_loader(ds_te_tr, int(best_bs_tr), False), device,
-                                         os.path.join(OUTDIR, "explanations", f"{endpoint}_snp_TR_best_IG.csv"),
-                                         feature_names=list(snp_df.columns), modality="snp")
+                                 "model": f"transformer_h{selected['hidden_dim']}_l{selected['layers']}",
+                                 **selected, "test_cindex": ci_te_tr})
+            explain_integrated_gradients(best_model_tr, make_loader(ds_te_tr, best_bs_tr, False), device,
+                str(Path(OUTDIR) / "explanations" / f"{endpoint}_snp_TR_best_IG.csv"),
+                feature_names=list(snp_df.columns), modality="snp")
 
             # ===== (B) MLP + Cox =====
             results_mlp = []
@@ -1189,61 +1114,34 @@ def main():
             folds = fivefold_groups_balanced(df_tr)
 
             if 'transformer' in args.soma_models:
-                # ===== (A) Transformer =====
-                results_tr = []
-                for k, (tr_idx, va_idx) in enumerate(folds):
-                    df_tr_k_raw = df_tr.iloc[tr_idx].reset_index(drop=True)
-                    df_va_k_raw = df_tr.iloc[va_idx].reset_index(drop=True)
-                    df_tr_k, scaler_k = apply_soma_norm_train(df_tr_k_raw, feature_cols, ranknorm_mode)
-                    df_va_k = apply_soma_norm_test(df_va_k_raw, feature_cols, ranknorm_mode, scaler_k)
-
-                    ds_tr_k = SomaDataset(df_tr_k, feature_cols)
-                    ds_va_k = SomaDataset(df_va_k, feature_cols)
-
-                    def build_model_tr():
-                        return SomaTokenTransformer(feature_cols, hidden_dim=128, nhead=4, nlayers=2)
-                    for lr in args.grid_lr:
-                        for bs in args.grid_bs:
-                            tag = f"{endpoint}_soma_TR_fold{k}_{args.soma_norm}"
-                            best_ci, best_state = train_evaluate_one_setting(
-                                build_model_tr, ds_tr_k, ds_va_k, device, args.epochs, lr, bs,
-                                tag, OUTDIR, record_iter=True
-                            )
-                            results_tr.append((k, lr, bs, best_ci, best_state))
-                            if best_state is not None:
-                                torch.save(best_state, os.path.join(OUTDIR, "ckpt",
-                                            f"{tag}_lr{lr}_bs{bs}.pt"))
-
-                best_lr_tr, best_bs_tr, (best_fold_tr, _, _, best_ci_tr, best_state_tr) = \
-                    select_best_setting_across_grid(results_tr)
-                save_soma_cv(results_tr, best_lr_tr, best_bs_tr, endpoint, 'Transformer',
+                def soma_datasets(tr_indices, va_indices):
+                    training, scaler = apply_soma_norm_train(df_tr.iloc[tr_indices], feature_cols, ranknorm_mode)
+                    validation = apply_soma_norm_test(df_tr.iloc[va_indices], feature_cols, ranknorm_mode, scaler)
+                    return SomaDataset(training, feature_cols), SomaDataset(validation, feature_cols)
+                selected, state, selected_folds = architecture_search(
+                    soma_datasets, lambda hidden, depth: SomaTokenTransformer(feature_cols, hidden_dim=hidden, nhead=4, nlayers=depth),
+                    folds, args, device, OUTDIR, f"{endpoint}_soma_TR")
+                results = [(int(row.fold), float(row.lr), int(row.batch_size), float(row.valid_cindex), None)
+                           for row in selected_folds.itertuples()]
+                save_soma_cv(results, selected['lr'], selected['batch_size'], endpoint, 'Transformer',
                              ranknorm_mode, len(feature_cols), args.seed, OUTDIR)
-
-
-                df_tr_best_raw_tr = df_tr.iloc[folds[best_fold_tr][0]].reset_index(drop=True)
-                df_tr_best_norm_tr, scaler_best_tr = apply_soma_norm_train(df_tr_best_raw_tr, feature_cols, ranknorm_mode)
-                df_te_norm_tr = apply_soma_norm_test(df_te, feature_cols, ranknorm_mode, scaler_best_tr)
-                ds_te_tr = SomaDataset(df_te_norm_tr, feature_cols)
-                best_model_tr = SomaTokenTransformer(feature_cols, hidden_dim=128, nhead=4, nlayers=2).to(device)
-
-                if best_state_tr is not None:
-                    best_model_tr.load_state_dict(best_state_tr)
-                torch.save(best_model_tr.state_dict(), os.path.join(OUTDIR, "ckpt", f"{endpoint}_soma_TR_best.pt"))
-                joblib.dump({"features": feature_cols, "normalization": ranknorm_mode, "scaler": scaler_best_tr},
-                            os.path.join(OUTDIR, "ckpt", f"{endpoint}_soma_TR_preprocess.joblib"))
-
-                ci_te_tr, risk_te_tr, t_te_tr, e_te_tr, pid_te_tr, _ = evaluate_risk_and_embed(
-                    best_model_tr, make_loader(ds_te_tr, int(best_bs_tr), False), device, need_embed=False)
-                save_pred_csv(OUTDIR, f"{endpoint}_soma_TR_test_best", pid_te_tr, risk_te_tr, t_te_tr, e_te_tr)
-                summary_rows.append({"endpoint": endpoint, "modality": "soma", "normalization": ranknorm_mode, "n_features": len(feature_cols),
-                                     "model": f"transformer_{args.soma_norm}_h128_l2_lr{best_lr_tr}_bs{best_bs_tr}_fold{best_fold_tr}",
-                                     "test_cindex": ci_te_tr})
-
-                # IG（Transformer）
-                ds_tr_best_ig = SomaDataset(df_tr_best_norm_tr, feature_cols)
+                training, scaler = apply_soma_norm_train(df_tr.iloc[folds[selected['fold']][0]], feature_cols, ranknorm_mode)
+                evaluation = apply_soma_norm_test(df_te, feature_cols, ranknorm_mode, scaler)
+                ds_te_tr = SomaDataset(evaluation, feature_cols)
+                best_model_tr = SomaTokenTransformer(feature_cols, hidden_dim=selected['hidden_dim'], nhead=4, nlayers=selected['layers']).to(device)
+                best_model_tr.load_state_dict(state)
+                torch.save(state, Path(OUTDIR) / "ckpt" / f"{endpoint}_soma_TR_best.pt")
+                joblib.dump({"features": feature_cols, "normalization": ranknorm_mode, "scaler": scaler},
+                            Path(OUTDIR) / "ckpt" / f"{endpoint}_soma_TR_preprocess.joblib")
+                ci, risk, time, event, pids, _ = evaluate_risk_and_embed(
+                    best_model_tr, make_loader(ds_te_tr, selected['batch_size'], False), device)
+                save_pred_csv(OUTDIR, f"{endpoint}_soma_TR_test_best", pids, risk, time, event)
+                summary_rows.append({"endpoint": endpoint, "modality": "soma", "normalization": ranknorm_mode,
+                                     "n_features": len(feature_cols), **selected,
+                                     "model": f"transformer_h{selected['hidden_dim']}_l{selected['layers']}", "test_cindex": ci})
                 explain_integrated_gradients(best_model_tr, make_loader(ds_te_tr, 4, False), device,
-                                             os.path.join(OUTDIR, "explanations", f"{endpoint}_soma_TR_best_IG.csv"),
-                                             feature_names=feature_cols, modality="soma")
+                    str(Path(OUTDIR) / "explanations" / f"{endpoint}_soma_TR_best_IG.csv"),
+                    feature_names=feature_cols, modality="soma")
 
             if 'mlp' in args.soma_models:
                 # ===== (B) MLP + Cox =====

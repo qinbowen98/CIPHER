@@ -45,7 +45,7 @@ python pipelines/run.py preprocess --target ecg
 
 | Input | Processing | Output |
 | --- | --- | --- |
-| QC'd PLINK BED/BIM/FAM files, discovery metadata, and endpoint labels | Define the discovery population; run additive logistic association for CHD and ischemic stroke; combine the intersection of the endpoint top-1,000,000 lists with the union of variants having P < 5e-5 | Selected genotype files, SNP list, and selection manifest |
+| QC'd PLINK BED/BIM/FAM files, discovery metadata, and endpoint labels | Define the discovery population; run additive logistic association for CHD and ischemic stroke; take the union of variants having P < 5e-5 for CHD or ischemic stroke | Selected genotype files, SNP list, and selection manifest |
 | Protein assay tables and optional feature panel | Parse participant and visit identifiers, retain ordered `seq.` features, and align training and validation columns | Prepared protein tables and feature manifest |
 | Fundus images | Center-crop to a square and resize to 224 × 224 | Prepared RGB images |
 | Twelve-lead ECG XML | Retain up to 1,000 samples per lead, apply the selected amplitude normalization, and zero-pad shorter leads | Fixed-length ECG XML and preprocessing manifest |
@@ -73,17 +73,19 @@ The example training configuration selects `replicate_2`. Matched assay features
 python pipelines/run.py single
 ```
 
-This stage prepares modality-specific participant sets and uses participant-grouped five-fold cross-validation. Each specified architecture is evaluated across the configured learning-rate and batch-size grid. Mean validation C-index selects the hyperparameter setting; the highest-validation-C-index fold within that setting supplies the saved checkpoint and its fitted preprocessing. Evaluation then uses the held-out external set.
+This stage prepares modality-specific participant sets and uses participant-grouped five-fold cross-validation. SNP, protein, and ECG Transformer models search hidden dimensions 64/128/256, encoder depths 1/2/3, learning rates 1e-4/3e-4/1e-3, and batch sizes 32/64/128/256. ECG BiLSTM searches hidden size/depth, and the CNN searches filter count. Mean validation C-index across all five folds selects the architecture and optimization settings. Mean validation C-index selects the hyperparameter setting; the highest-validation-C-index fold within that setting supplies the saved checkpoint and its fitted preprocessing. Evaluation then uses the held-out external set.
 
 The example runs seeds 42, 66, and 100, learning rates 1e-4/3e-4/1e-3, and batch sizes 32/64/128/256. Models include molecular Transformer, MLP-Cox and PCA-Cox, ECG Transformer/BiLSTM/CNN, and fundus backbones. Outputs include checkpoints, predictions, embeddings, training curves, and aggregate evaluation metrics.
 
 ```bash
 bash pipelines/1_single_modality/run_soma_ablation.sh
+python pipelines/1_single_modality/collect_ablation.py \
+  --root private_runs/training/soma_ablation --output figure_data/ablation
 ```
 
 The protein ablation compares rank normalization with min-max scaling of log1p inputs, then compares the four feature panels using MLP-Cox. Conditions share the configured seeds and tuning budget. Each selected setting exports all five validation-fold scores, their mean, and sample standard deviation.
 
-Single-modality Transformer interpretation uses evaluation samples and saves signed per-sample integrated gradients in batch NPZ files. Each batch retains aligned identifiers, input tensors, follow-up and event labels. A feature-order manifest and mean-absolute attribution summary accompany these files.
+Single-modality Transformer interpretation uses evaluation samples and saves signed per-sample integrated gradients in batch NPZ files. Each batch retains aligned identifiers, input tensors, follow-up and event labels. A feature-order manifest and mean-absolute attribution summary accompany these files. Compatibility outputs include per-sample `*_IG.csv` (`ig_abs`: absolute attribution), `*_IG_input.csv` (`input_value` and legacy `ig_abs`: model-input values), and per-sample ECG attribution text files. These files remain in the private run directory. Fundus Grad-CAM uses the evaluation dataset.
 
 ## 2. Train multimodal models
 
@@ -124,6 +126,22 @@ python -m pipelines.3_CIPHER_clinical_applications.inference.evaluate_prediction
 ```
 
 The manifest is a JSON list. Each item specifies `prediction_file`, `endpoint`, `model`, and `split`; optional fields include `strategy`, `cohort`, and `event_column`/`risk_column`/`time_column`. Prediction scores must increase with risk. The evaluator exports aggregate point estimates and bootstrap results.
+
+### Six-strategy evaluation in UKB and MUCH
+
+```bash
+python -m pipelines.3_CIPHER_clinical_applications.inference.six_strategies \
+  --cohort UKB --table data/private/ukb_six_strategy_features.csv \
+  --models-dir private_runs/clinical_models --output private_runs/six_strategies \
+  --id-column eid --event-column event --time-column time --age-range 40 74
+
+python -m pipelines.3_CIPHER_clinical_applications.inference.six_strategies \
+  --cohort MUCH --table data/private/much_six_strategy_features.csv \
+  --models-dir private_runs/clinical_models --output private_runs/six_strategies \
+  --id-column PATIENT_SN --event-column ASCVD_EVENT --time-column FOLLOWUP_YEARS
+```
+
+`models-dir` contains frozen `final.joblib` artifacts for risk regression, risk-to-Cox, top-risk-label classification, direct event-time regression, direct observed-event classification, and clinical Cox. The evaluator requires all six strategies and uses their stored preprocessing. It exports aggregate C-index and observed event-status AUROC with paired bootstrap results. Figure 5 reads these tables from `figure_data/fig5_final/six_strategies/<cohort>/aggregate_metrics.csv`.
 
 ## Predict in your own cohort
 

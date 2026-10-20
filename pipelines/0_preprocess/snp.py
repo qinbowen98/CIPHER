@@ -42,14 +42,12 @@ def phenotype_for_plink(labels, fam, endpoint):
     return joined[['FID', 'IID', endpoint]]
 
 
-def select_variants(results, top_k, p_threshold):
-    ranked = []
+def select_variants(results, p_threshold):
     significant = set()
-    for endpoint, result in results.items():
-        result = result.loc[result.TEST.eq('ADD')].dropna(subset=['P']).sort_values('P', kind='mergesort')
-        ranked.append(set(result.head(top_k).SNP))
-        significant |= set(result.loc[result.P.lt(p_threshold), 'SNP'])
-    return sorted(set.intersection(*ranked) | significant)
+    for result in results.values():
+        additive = result.loc[result.TEST.eq('ADD')].dropna(subset=['P'])
+        significant.update(additive.loc[additive.P.lt(p_threshold), 'SNP'])
+    return sorted(significant)
 
 
 def run(args):
@@ -72,7 +70,7 @@ def run(args):
         subprocess.run([args.plink, '--bfile', str(args.bfile), '--pheno', str(pheno_path),
                         '--allow-no-sex', '--logistic', '--out', str(prefix)], check=True)
         results[endpoint] = pd.read_csv(str(prefix) + '.assoc.logistic', sep=r'\s+')
-    selected = select_variants(results, args.top_k, args.p_threshold)
+    selected = select_variants(results, args.p_threshold)
     if not selected:
         raise ValueError('No variants passed the configured selection rule.')
     variant_file = output / 'selected_snps.txt'
@@ -80,8 +78,8 @@ def run(args):
     subprocess.run([args.plink, '--bfile', str(args.bfile), '--extract', str(variant_file),
                     '--make-bed', '--out', str(output / 'selected')], check=True)
     (output / 'selection.json').write_text(json.dumps({
-        'endpoints': args.endpoints, 'top_k': args.top_k, 'p_threshold': args.p_threshold,
-        'rule': 'intersection of endpoint top-k lists, union all endpoint P-threshold lists',
+        'endpoints': args.endpoints, 'p_threshold': args.p_threshold,
+        'rule': 'union of endpoint additive-association P-threshold lists',
         'phenotype_coding': '0/1 to 1/2', 'n_selected': len(selected),
         'selected_snps_sha256': hashlib.sha256(variant_file.read_bytes()).hexdigest(),
         'n_threshold_per_endpoint': {name: int(frame.loc[frame.TEST.eq('ADD'), 'P'].lt(args.p_threshold).sum()) for name, frame in results.items()},
@@ -100,11 +98,10 @@ def main():
     parser.add_argument('--plink', default='plink', help='PLINK 1.9 executable.')
     parser.add_argument('--endpoints', nargs='+', default=['CHD', 'istroke'])
     parser.add_argument('--excluded-site', default='\u9996\u94a2')
-    parser.add_argument('--top-k', type=int, default=1000000)
     parser.add_argument('--p-threshold', type=float, default=5e-5)
     args = parser.parse_args()
-    if args.top_k < 1 or not 0 < args.p_threshold <= 1:
-        parser.error('top-k must be positive and p-threshold must be in (0, 1].')
+    if not 0 < args.p_threshold <= 1:
+        parser.error('p-threshold must be in (0, 1].')
     if len(args.endpoints) != len(set(args.endpoints)):
         parser.error('Endpoint names must be unique.')
     run(args)

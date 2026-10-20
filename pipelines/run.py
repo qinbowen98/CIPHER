@@ -41,7 +41,7 @@ def training_commands(stage, cfg, config_path):
                 raise ValueError('Invalid modality combination.')
             if stage == 'multi' and len(mods) < 2:
                 raise ValueError('Multimodal training requires at least two modalities.')
-            output = resolve(cfg.get('training_output', '../private_runs/training'), config_path) / stage / ('_'.join(mods) + '_seed' + str(seed))
+            output = resolve(cfg.get('training_output', 'private_runs/training'), config_path) / stage / ('_'.join(mods) + '_seed' + str(seed))
             folder = '1_single_modality' if stage == 'single' else '2_multi_modality'
             command = [sys.executable, str(ROOT / 'pipelines' / folder / 'train.py')]
             command += ['--' + mod for mod in mods] + flags({**common, **spec.get('arguments', {}), 'seed': seed, 'outdir': str(output)})

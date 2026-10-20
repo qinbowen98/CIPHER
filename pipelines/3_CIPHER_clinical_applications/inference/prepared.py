@@ -7,7 +7,7 @@ import joblib
 import numpy as np
 import pandas as pd
 
-from ..clinical_cipher.common import clip_frame, minmax_apply, predict_estimator_score, read_table, safe_cindex, safe_event_auc, safe_horizon_auc
+from ..clinical_cipher.common import clip_frame, minmax_apply, predict_estimator_score, read_table, safe_cindex, safe_event_auc
 
 
 def predict(artifact, frame):
@@ -51,6 +51,10 @@ def run(cfg, cohort, save_private=False):
         chosen = [(path, a) for path, a in models if a["endpoint"] == endpoint]
         if not chosen:
             raise ValueError("Missing endpoint models: " + endpoint)
+        required_strategies = set(spec.get("required_strategies", []))
+        available = {artifact["strategy"] for _, artifact in chosen}
+        if required_strategies - available:
+            raise ValueError("Missing frozen strategies: " + ", ".join(sorted(required_strategies - available)))
         cols = sorted({col for _, a in chosen for col in a["feature_cols"]})
         outcomes = spec["outcomes"][endpoint]
         data = table.copy()
@@ -75,11 +79,10 @@ def run(cfg, cohort, save_private=False):
         if any(len(score) != len(data) or not np.isfinite(score).all() for _, _, score in scores):
             raise ValueError("Nonfinite model predictions")
         def record(a, score, indices, replicate):
-            return {"cohort": cohort, "endpoint": endpoint, "strategy": a["strategy"], "target": a["target"], "model": a["model_name"], "replicate": replicate,
+            return {"cohort": cohort, "endpoint": endpoint, "strategy": a["strategy"], "target": a["target"], "model": a["model_name"], "replicate": replicate, "bootstrap": replicate, "split": "test",
                     "n": len(indices), "events": int(event[indices].sum()),
                     "event_auroc": safe_event_auc(event[indices], score[indices]),
-                    "cindex": safe_cindex(time[indices], event[indices], score[indices]),
-                    "horizon_auroc": safe_horizon_auc(time[indices], event[indices], score[indices], spec.get("horizon_years", 5.0))}
+                    "cindex": safe_cindex(time[indices], event[indices], score[indices])}
         all_indices = np.arange(len(data))
         rows.extend(record(a, score, all_indices, 0) for _, a, score in scores)
         # Paired, event-stratified participant bootstrap: identical draws per model.
@@ -95,8 +98,10 @@ def run(cfg, cohort, save_private=False):
                 predictions[key] = score
             predictions.to_parquet(output / (endpoint + "_PRIVATE_predictions.parquet"), index=False)
     metrics = output / "aggregate_metrics.csv"
-    pd.DataFrame(rows).to_csv(metrics, index=False)
-    print("Saved aggregate model metrics. No participant output was written.")
+    result = pd.DataFrame(rows)
+    result.to_csv(metrics, index=False)
+    print("Saved aggregate model metrics.")
+    return result
 
 
 if __name__ == "__main__":
