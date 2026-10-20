@@ -177,7 +177,7 @@ Open a notebook and run its cells in order. Each analysis cell has an English he
 | `supplementary_figures/figs5.ipynb` | Protein associations, enrichment, and ECG examples |
 | `supplementary_figures/figs6.ipynb` | Representation and attribution comparisons |
 
-Aggregate figure tables are included in [`figure_data/`](figure_data/README.md). Notebooks read from `figure_data/` by default. Set `CIPHER_ANALYSIS_ROOT` to use an authorized analysis directory with the original relative input structure. Plots and generated tables are written under `figure_outputs/<notebook>/`. Individual example selection uses the local `CIPHER_EXAMPLE_PID` environment variable.
+Notebooks read locally supplied figure tables from `figure_data/` by default. Set `CIPHER_ANALYSIS_ROOT` to use an authorized analysis directory with the original relative input structure. Plots and generated tables are written under `figure_outputs/<notebook>/`. Individual example selection uses the local `CIPHER_EXAMPLE_PID` environment variable.
 
 AUROC panels consume recalculated `event_auroc` results. Aggregate source tables and participant-level predictions serve different analyses; configure the inputs referenced by each cell accordingly.
 

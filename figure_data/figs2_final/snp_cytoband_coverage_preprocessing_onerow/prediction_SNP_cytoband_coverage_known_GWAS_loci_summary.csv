@@ -1,4 +1,0 @@
-endpoint,known_GWAS_hits_mapped_to_cytoband,known_GWAS_hits_covered_by_prediction_SNP_cytoband,coverage_ratio
-CHD,1264,1255,0.992879746835443
-istroke,257,257,1.0
-CHD_or_istroke,1521,1512,0.9940828402366864
