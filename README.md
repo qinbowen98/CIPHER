@@ -159,10 +159,10 @@ Open a notebook and run its cells in order. Each analysis cell has an English he
 | `supplementary_figures/figs5.ipynb` | Protein associations, enrichment, and ECG examples |
 | `supplementary_figures/figs6.ipynb` | Representation and attribution comparisons |
 
-Notebooks read from `figure_data/` by default. Set `CIPHER_ANALYSIS_ROOT` to use an authorized analysis directory with the original relative input structure. Plots and generated tables are written under `figure_outputs/<notebook>/`. Individual example selection uses the local `CIPHER_EXAMPLE_PID` environment variable.
+Aggregate figure tables are included in [`figure_data/`](figure_data/README.md). Notebooks read from `figure_data/` by default. Set `CIPHER_ANALYSIS_ROOT` to use an authorized analysis directory with the original relative input structure. Plots and generated tables are written under `figure_outputs/<notebook>/`. Individual example selection uses the local `CIPHER_EXAMPLE_PID` environment variable.
 
 AUROC panels consume recalculated `event_auroc` results. Aggregate source tables and participant-level predictions serve different analyses; configure the inputs referenced by each cell accordingly.
 
 ## Data access
 
-Participant inputs, outcomes, predictions, embeddings, individual attributions, local configurations, and run outputs are excluded from Git. The distributed research assets are code, feature-only panel lists, notebooks with cleared outputs, and the two clinical model files.
+Participant inputs, outcomes, predictions, embeddings, individual attributions, local configurations, and run outputs are excluded from Git. The distributed research assets are code, feature-only panel lists, aggregate figure source tables, notebooks with cleared outputs, and the two clinical model files.

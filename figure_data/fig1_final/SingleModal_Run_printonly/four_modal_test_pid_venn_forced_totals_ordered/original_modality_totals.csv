@@ -1,0 +1,5 @@
+modality,display_label,original_n_samples
+SNP,SNP,1005
+ECG,ECG,840
+Soma,Plasma proteomics,1260
+Fundus,Fundus,990
