@@ -146,18 +146,18 @@ Open a notebook and run its cells in order. Each analysis cell has an English he
 
 | Notebook | Analysis |
 | --- | --- |
-| `main_figures/AAA_final_fig1.ipynb` | Cohort modality availability and intersections |
-| `main_figures/AAA_final_fig2.ipynb` | Molecular model evaluation, attributions, loci, and enrichment |
-| `main_figures/AAA_final_fig3.ipynb` | ECG/fundus evaluation, attribution, and protein associations |
-| `main_figures/AAA_final_fig4.ipynb` | Multimodal performance, event enrichment, and representation analyses |
-| `main_figures/AAA_final_fig5.ipynb` | Clinical transfer-model evaluation |
-| `supplementary_figures/AAA_final_figs0.ipynb` | Training and validation curves |
-| `supplementary_figures/AAA_final_figs1.ipynb` | Cohort characteristics and modality availability |
-| `supplementary_figures/AAA_final_figs2.ipynb` | Protein ablation and SNP coverage |
-| `supplementary_figures/AAA_final_figs3.ipynb` | Unimodal validation and cytoband attribution |
-| `supplementary_figures/AAA_final_figs4.ipynb` | Molecular attribution and GO enrichment |
-| `supplementary_figures/AAA_final_figs5.ipynb` | Protein associations, enrichment, and ECG examples |
-| `supplementary_figures/AAA_final_figs6.ipynb` | Representation and attribution comparisons |
+| `main_figures/fig1.ipynb` | Cohort modality availability and intersections |
+| `main_figures/fig2.ipynb` | Molecular model evaluation, attributions, loci, and enrichment |
+| `main_figures/fig3.ipynb` | ECG/fundus evaluation, attribution, and protein associations |
+| `main_figures/fig4.ipynb` | Multimodal performance, event enrichment, and representation analyses |
+| `main_figures/fig5.ipynb` | Clinical transfer-model evaluation |
+| `supplementary_figures/figs0.ipynb` | Training and validation curves |
+| `supplementary_figures/figs1.ipynb` | Cohort characteristics and modality availability |
+| `supplementary_figures/figs2.ipynb` | Protein ablation and SNP coverage |
+| `supplementary_figures/figs3.ipynb` | Unimodal validation and cytoband attribution |
+| `supplementary_figures/figs4.ipynb` | Molecular attribution and GO enrichment |
+| `supplementary_figures/figs5.ipynb` | Protein associations, enrichment, and ECG examples |
+| `supplementary_figures/figs6.ipynb` | Representation and attribution comparisons |
 
 Notebooks read from `figure_data/` by default. Set `CIPHER_ANALYSIS_ROOT` to use an authorized analysis directory with the original relative input structure. Plots and generated tables are written under `figure_outputs/<notebook>/`. Individual example selection uses the local `CIPHER_EXAMPLE_PID` environment variable.
 
