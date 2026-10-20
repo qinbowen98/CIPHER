@@ -255,7 +255,7 @@ class FusionModel(nn.Module):
         if self.use_soma: feats.append(self.soma_enc(soma))
         if self.use_ecg: feats.append(self.ecg_enc(ecg))
 
-        feats = torch.stack(feats, dim=1)        # (B, M, 256)
+        feats = torch.stack(feats, dim=1)
         attn_w = torch.softmax(self.attn_net(feats), dim=1)
         fused = (feats * attn_w).sum(1)
         return self.mlp(fused).squeeze(-1)

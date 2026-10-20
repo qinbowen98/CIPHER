@@ -1,4 +1,3 @@
-# ========================= main_single.py (FiveFold + Embeddings + IG) =========================
 import warnings
 warnings.filterwarnings('ignore')
 import os, argparse, pickle
@@ -33,7 +32,6 @@ import timm
 # Captum
 from captum.attr import IntegratedGradients
 
-# ==== Your models ====
 from model import (
     TransformerModule,
     ECGTransformer,
@@ -379,27 +377,27 @@ def extract_embeddings(model, loader, endpoint_dir):
 
         if args.fundus:
             f = model.fundus_enc(img)                 # (B, dim_fundus)
-            f = model.fundus_proj(f)                  # (B, 256)
+            f = model.fundus_proj(f)
             emb_fundus.append(f.detach().cpu().numpy()); feats.append(f)
         else:
             f = None
 
         if args.snp:
-            s = model.snp_enc(snp)                    # (B, 256)
+            s = model.snp_enc(snp)
             emb_snp.append(s.detach().cpu().numpy()); feats.append(s)
         if args.soma:
             so = model.soma_enc(soma)
             emb_soma.append(so.detach().cpu().numpy()); feats.append(so)
         if args.ecg:
-            e_ = model.ecg_enc(ecg)                   # (B, 256)
+            e_ = model.ecg_enc(ecg)
             emb_ecg.append(e_.detach().cpu().numpy()); feats.append(e_)
 
         if len(feats) == 0:
             continue
 
-        Z = torch.stack(feats, dim=1)                 # (B, M, 256)
+        Z = torch.stack(feats, dim=1)
         attn_w = torch.softmax(model.attn_net(Z), dim=1)  # (B,M,1)
-        fused = (Z * attn_w).sum(1)                   # (B,256)
+        fused = (Z * attn_w).sum(1)
         emb_fused.append(fused.detach().cpu().numpy())
         pids.extend(list(pid))
 
