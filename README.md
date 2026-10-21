@@ -143,17 +143,32 @@ python -m pipelines.3_CIPHER_clinical_applications.inference.evaluate_prediction
 
 The manifest is a JSON list. Each item specifies `prediction_file`, `endpoint`, `model`, and `split`; optional fields include `strategy`, `cohort`, and `event_column`/`risk_column`/`time_column`. Prediction scores must increase with risk. The evaluator exports aggregate point estimates and bootstrap results.
 
+### Train the six clinical strategies
+
+```bash
+python -m pipelines.3_CIPHER_clinical_applications.train_six_strategies --write-config
+# Set the protected input paths and source-cohort fields in the local configuration.
+python -m pipelines.3_CIPHER_clinical_applications.train_six_strategies --audit-splits-only
+python -m pipelines.3_CIPHER_clinical_applications.train_six_strategies
+```
+
+The local configuration is written to `config/clinical_six_strategies.local.json`. Inputs are the longitudinal clinical table, baseline cohort labels and endpoint-specific CIPHER risk files. It specifies the training/evaluation waves, follow-up offsets, clinical feature columns, outcome columns, clipping limits and candidate algorithms. The default endpoints are ischemic stroke and ASCVD.
+
+Training compares clinical-to-risk regression, risk-to-Cox, top-risk-label classification, direct event-time regression, direct any-event classification and clinical Cox. In each of 20 source-training bootstrap samples, candidate algorithms are fitted and the risk regression algorithm for risk-to-Cox is selected by validation C-index. Top-risk thresholds are defined from each training sample. The workflow then fits final models on the complete source-training split; the final risk-to-Cox algorithm is selected by mean validation C-index over the training bootstrap runs. Preprocessing and clinical predictors are stored in each model artifact.
+
+Outputs under `private_runs/clinical_six_strategies/` include aggregate validation/test C-index and event-status AUROC, `ALL_model_results_long.csv`, summaries, and `models/<endpoint>/<strategy>/<target>/<algorithm>/final.joblib`. Bootstrap model artifacts, participant predictions and fitted preprocessing remain in the protected run directory. These 20 training resamples are separate from the 500 paired participant bootstrap evaluations of frozen models in external cohorts.
+
 ### Six-strategy evaluation in UKB and MUCH
 
 ```bash
 python -m pipelines.3_CIPHER_clinical_applications.inference.six_strategies \
   --cohort UKB --table data/private/ukb_six_strategy_features.csv \
-  --models-dir private_runs/clinical_models --output private_runs/six_strategies \
+  --models-dir private_runs/clinical_six_strategies/models --output private_runs/six_strategies \
   --id-column eid --event-column event --time-column time --age-range 40 74
 
 python -m pipelines.3_CIPHER_clinical_applications.inference.six_strategies \
   --cohort MUCH --table data/private/much_six_strategy_features.csv \
-  --models-dir private_runs/clinical_models --output private_runs/six_strategies \
+  --models-dir private_runs/clinical_six_strategies/models --output private_runs/six_strategies \
   --id-column PATIENT_SN --event-column ASCVD_EVENT --time-column FOLLOWUP_YEARS
 ```
 
