@@ -34,7 +34,7 @@ Set input and output locations in `pipeline.local.json`. Relative paths resolve 
 
 The stages below run in order. Use `--config` to select another configuration and `--dry-run` to inspect planned preprocessing or training jobs.
 
-## Source-cohort endpoint definitions
+## Source cohort endpoint definitions
 
 The following definitions apply to the CMCS source cohorts. CHD was classified using these MONICA-informed study rules; an event was recorded when any of the following conditions was met:
 
@@ -103,7 +103,7 @@ The protein ablation compares rank normalization with min-max scaling of log1p i
 
 Single-modality Transformer interpretation uses evaluation samples and saves signed per-sample integrated gradients in batch NPZ files. Each batch retains aligned identifiers, input tensors, follow-up and event labels. A feature-order manifest and mean-absolute attribution summary accompany these files. Compatibility outputs include per-sample `*_IG.csv` (`ig_abs`: absolute attribution), `*_IG_input.csv` (`input_value` and legacy `ig_abs`: model-input values), and per-sample ECG attribution text files. These files remain in the private run directory. Fundus Grad-CAM uses the evaluation dataset.
 
-### Full uni-BD training with uni-SG selection
+### Full uni-BD training with uni-SG model selection
 
 ```bash
 bash pipelines/1_single_modality/run_train_validate_test.sh \
@@ -156,9 +156,9 @@ This entry loads the existing SNP/ECG Transformer, Soma Transformer and ViT chec
 
 For SNP/Soma, `scaler_root` can supply source-fitted transforms as `<modality>/<endpoint>.joblib`. Without stored transforms, the evaluator fits the original source-cohort transformation using non-SG participants with available modality data and outcomes: StandardScaler for SNP and empirical rank normalization for Soma. SG values are transformed without refitting. The evaluation manifest records the chosen scope and feature order. Predictions, transforms, Grad-CAM files and metrics remain in the protected output directory.
 
-### Load the supplied neural checkpoints
+### Load the pretrained neural checkpoints
 
-`single-test` loads both the supplied standalone SNP/ECG checkpoints and encoder-plus-head checkpoints produced by the architecture-search entry point. Input dimensions and Transformer depths are read from the weights; all tensors must match. The supplied `ckpt_final_1229` directory is the single-modality checkpoint root.
+`single-test` loads both the pretrained standalone SNP/ECG checkpoints and encoder-plus-head checkpoints produced by the architecture-search entry point. Input dimensions and Transformer depths are read from the weights; all tensors must match. The `ckpt_final_1229` directory is the single-modality checkpoint root.
 
 ```bash
 python -m pipelines.check_weights \
@@ -169,7 +169,7 @@ python -m pipelines.check_weights \
 
 This checks every local checkpoint, including full forward passes with synthetic inputs, without reading participant data. Complete fusion checkpoints restore all encoders, attention/risk heads and `fundus_proj`; single-modality initialization is disabled when loading a complete fusion model.
 
-To evaluate a supplied folder containing `CHD_model.pt`, `istroke_model.pt` and `ICVD_model.pt`, use `python -m pipelines.2_multi_modality.evaluate_checkpoints --checkpoint_dir data/private/fusion_checkpoints` with the same protected input arguments as the training entry point and `--cmcs_standard_csv`. `--soma_scaler` accepts the original fitted IRN; otherwise it is reconstructed from source BD visit-02 protein inputs. Historical fusion SNP inputs are raw dosages by default; supply `--snp_scaler` only for checkpoints trained with that transform. `--evaluation_visits` selects protein visits and `--save_ig` exports multi-SG individual attributions. Outputs remain private.
+To evaluate a supplied folder containing `CHD_model.pt`, `istroke_model.pt` and `ICVD_model.pt`, use `python -m pipelines.2_multi_modality.evaluate_checkpoints --checkpoint_dir data/private/fusion_checkpoints` with the same protected input arguments as the training entry point and `--cmcs_standard_csv`. `--soma_scaler` accepts the original fitted IRN; otherwise it is reconstructed from source BD visit-02 protein inputs. Historical fusion SNP inputs are raw dosages by default; supply `--snp_scaler` only for checkpoints trained with that transform. `--evaluation_visits` selects protein visits and `--save_ig` exports multi-SG individual attributions.
 
 ```bash
 bash pipelines/2_multi_modality/run_checkpoints.sh \
@@ -185,7 +185,7 @@ bash pipelines/2_multi_modality/run_checkpoints.sh \
   --outdir private_runs/fusion_checkpoint_evaluation
 ```
 
-The supplied weights require 81,651 SNPs and 1,795 protein assay features. Inputs must retain the original feature order and preprocessing. Tensor loading and synthetic forward checks do not establish numerical reproduction of historical participant predictions.
+The pretrained weights require 81,651 SNPs and 1,795 protein assay features. Inputs must retain the original feature order and preprocessing. Tensor loading and synthetic forward checks do not establish numerical reproduction of historical participant predictions.
 
 ### Follow-up origin
 
@@ -399,6 +399,6 @@ The preprocessing and training stages produce the feature tables, predictions, e
 
 ## Data access
 
-The CMCS and MUCH data are subject to privacy, ethical, and confidentiality restrictions. Requests for academic access should be directed to Professor Jing Liu and include a detailed research proposal. Access is subject to approval and a data use agreement that protects participant confidentiality.
+The CMCS and MUCH data are subject to restrictions. Requests for academic access should be directed to Professor Jing Liu and include a detailed research proposal. Access is subject to approval and a data use agreement that protects participant confidentiality.
 
 UK Biobank data were used under Application No. 91486. Access must be obtained directly from UK Biobank through its approved access procedures; the authors are not permitted to redistribute individual-level UK Biobank data.
