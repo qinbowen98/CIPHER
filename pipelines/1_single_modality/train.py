@@ -585,7 +585,6 @@ def explain_vit_gradcam(vit_model, loader,device, outdir, endpoint):
         cam = gradcam.generate_cam()[0].detach().cpu().numpy()
         cam_2d = cam.reshape(14, 14)  # for vit_small_patch16_224
         np.savetxt(os.path.join(outdir, f"gradcam_{cnt}_{pid[0]}_{endpoint}.txt"), cam_2d, fmt="%.6f")
-"""Write mean absolute integrated gradients to the protected run directory."""
 def fivefold_groups_balanced(df):
     pid_event = df.groupby("pid")["event"].max()  # (pid → 0/1)
     pids = pid_event.index.values
