@@ -103,6 +103,28 @@ The protein ablation compares rank normalization with min-max scaling of log1p i
 
 Single-modality Transformer interpretation uses evaluation samples and saves signed per-sample integrated gradients in batch NPZ files. Each batch retains aligned identifiers, input tensors, follow-up and event labels. A feature-order manifest and mean-absolute attribution summary accompany these files. Compatibility outputs include per-sample `*_IG.csv` (`ig_abs`: absolute attribution), `*_IG_input.csv` (`input_value` and legacy `ig_abs`: model-input values), and per-sample ECG attribution text files. These files remain in the private run directory. Fundus Grad-CAM uses the evaluation dataset.
 
+### Full uni-BD training with uni-SG selection
+
+```bash
+bash pipelines/1_single_modality/run_train_validate_test.sh \
+  --soma_train data/private/soma_bd.csv \
+  --soma_valid data/private/soma_sg.csv \
+  --snp_prefix data/private/snp/cohort \
+  --fundus_dir data/private/fundus \
+  --ecg_dir data/private/ecg \
+  --label_csv data/private/outcomes.csv \
+  --soma_gene_csv pipelines/0_preprocess/soma_panels/replicate_2.csv \
+  --cmcs_standard_csv data/private/cohort_metadata.csv \
+  --fundus_weights data/private/vit_small/pytorch_model.bin \
+  --outdir private_runs/single_uni_bd_validation
+```
+
+This entry point trains each modality on all eligible uni-BD participants, excluding four-modality-complete BD participants. Uni-SG comprises SG participants without all four modalities; multi-SG comprises SG participants with all four. Cohort metadata must identify all SG participants with `subcohort=102`. Outcomes and modality-specific follow-up are aligned before training. The original Adam/Cox training loop is reused. SNP standardization and protein IRN are fitted on uni-BD only and applied unchanged to both SG groups.
+
+The model architectures match the frozen-checkpoint evaluator: SNP/ECG Transformers use 256 hidden units and 4/3 layers, the protein Transformer uses 256 hidden units and 8 layers, and fundus uses ViT-Small. `--grid_lr` and `--grid_bs` control the optimization grid. Each setting trains on the entire uni-BD cohort; its epoch and the final setting are selected by uni-SG C-index. Multi-SG is evaluated after selection. `--modalities snp soma ecg fundus` and `--endpoints CHD istroke ICVD` select the tasks.
+
+Outputs include `metrics.csv`, per-setting training curves, `validation_search.csv`, selected weights under `checkpoints/`, fitted transforms under `scalers/`, and per-cohort predictions. Per-sample multi-SG integrated gradients are saved by default as compressed NPZ files containing signed attributions, model inputs, participant/visit keys, and convergence deltas. `--ig_cohorts uni_sg multi_sg` explains both SG groups; `--ig_steps` controls integration accuracy. The baseline is zero in model-input space. Protein predictions and metrics retain separate visits as rows and report participant counts separately. All run outputs remain private and are excluded from Git.
+
 ## 2. Train multimodal models
 
 ```bash
