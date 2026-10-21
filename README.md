@@ -321,4 +321,6 @@ The preprocessing and training stages produce the feature tables, predictions, e
 
 ## Data access
 
-Participant inputs, outcomes, predictions, embeddings, individual attributions, local configurations, and run outputs are excluded from Git. The distributed research assets are code, feature-only panel lists, aggregate figure source tables, notebooks with cleared outputs, and the two clinical model files.
+The CMCS and MUCH data are subject to privacy, ethical, and confidentiality restrictions. Requests for academic access should be directed to Professor Jing Liu and include a detailed research proposal. Access is subject to approval and a data use agreement that protects participant confidentiality.
+
+UK Biobank data were used under Application No. 91486. Access must be obtained directly from UK Biobank through its approved access procedures; the authors are not permitted to redistribute individual-level UK Biobank data.
