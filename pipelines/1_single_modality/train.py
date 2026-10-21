@@ -187,7 +187,7 @@ def attach_time_event(df_pid,df_label,modality):
         df = df[df['adjusted_time'] >= 0].copy()
         return df
     else:
-        df['offset'] = 10
+        df['offset'] = {'snp': 5, 'ecg': 5, 'fundus': 10}[modality]
         df['adjusted_time'] = df['time'] - df['offset']
         df = df[df['adjusted_time']>=0].copy()
         return df
