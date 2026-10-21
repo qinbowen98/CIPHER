@@ -109,9 +109,34 @@ Single-modality Transformer interpretation uses evaluation samples and saves sig
 python pipelines/run.py multi
 ```
 
-This stage aligns the configured modalities by participant and visit, constructs modality encoders and the fusion model, and trains with a Cox survival objective. Modality combinations, endpoints, seeds, epochs and batch size are selected in `training.multi`.
+The fusion model uses a 256-dimensional shared representation: four SNP Transformer layers, eight Soma Transformer layers and three ECG Transformer layers, plus a ViT-small fundus encoder. Modality embeddings pass through a shared LayerNorm and attention pooling. Encoder checkpoints are loaded separately for each endpoint from `training.multi.arguments.ckpt_root`:
 
-Training saves fold checkpoints, validation summaries, held-out risk predictions and embeddings. When `save_ig` is enabled, it also saves per-sample attributions for each included modality. The configured modality inputs are shared with stage 1; encoder construction and training are defined in `2_multi_modality/model.py` and `train.py`.
+| Encoder | Checkpoint relative to the root |
+| --- | --- |
+| Fundus | `FUNDUS/{endpoint}_vit_small_finetune.pt` |
+| SNP | `SNP/{endpoint}_transformer_h256_l4.pt` |
+| Soma | `SOMA/{endpoint}_transformer_h256_l8.pt` |
+| ECG | `ECG/{endpoint}_transformer_h256_l3.pt` |
+
+The original training configuration uses encoder learning rates of 1e-6 and attention/prediction-head learning rates of 1e-3. The fundus projection and shared LayerNorm remain fixed, matching the original optimizer grouping. Missing encoder tensors or incompatible shapes stop initialization; a loading report records restored parameters. Seeds, feature order, transforms, architecture and cohort settings are saved with each model.
+
+By default, complete-modality BD participants provide training data and complete-modality SG participants provide validation data for epoch selection (`selection_scope: sg`). Non-longitudinal training uses visit 12; the evaluation visit filter is configurable. Soma rank normalization uses source BD visit-02 records.
+
+Training writes endpoint checkpoints, source-fitted transforms, curves, protected participant predictions and aggregate C-index/event-status AUROC under the configured output directory. Enable `save_ig` for per-sample signed IG, or `save_gradcam` for fundus maps. Interpretation can also run after training by setting `mode: explain` with the same output directory and input settings. `mode: evaluate` loads the saved model without training. Grad-CAM targets the final fused risk while retaining all available modality inputs. The default `gradcam_method: historical` reproduces the original final-block, signed token-weighting calculation; `spatial` uses the final block's pre-attention normalization layer. `gradcam_mode` selects signed or positive maps. Every evaluation row is exported, without the original ten-batch limit.
+
+### Evaluate frozen single-modality checkpoints
+
+```bash
+python pipelines/run.py single-test
+```
+
+This entry loads the existing SNP/ECG Transformer, Soma Transformer and ViT checkpoint architectures. Set `training.single_evaluation.arguments.ckpt_root` to their checkpoint root. `cohort: multi_sg` selects SG participants with all four modalities, matching the original fixed-checkpoint test route. `uni_sg` selects incomplete-modality SG participants with the requested modality; `all_sg` includes both groups. Available participants and outcomes determine the endpoint-specific counts.
+
+For SNP/Soma, `scaler_root` can supply source-fitted transforms as `<modality>/<endpoint>.joblib`. Without stored transforms, the evaluator fits the original source-cohort transformation using non-SG participants with available modality data and outcomes: StandardScaler for SNP and empirical rank normalization for Soma. SG values are transformed without refitting. The evaluation manifest records the chosen scope and feature order. Predictions, transforms, Grad-CAM files and metrics remain in the protected output directory.
+
+### Follow-up origin
+
+`time_origin_year` declares the origin of the supplied outcome-duration columns. With origin 2002, SNP/ECG offsets are five years and fundus offsets ten years; Soma uses its recorded visit. With origin 1992, the corresponding offsets are fifteen and twenty years, and Soma visit 02 has offset ten. Both represent the same measurement dates when paired with correctly defined outcome durations. Negative post-measurement follow-up is excluded. Repeated-visit output records retain their visit labels.
 
 ## 3. Evaluate clinical transfer models
 

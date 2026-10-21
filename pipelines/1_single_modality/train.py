@@ -65,7 +65,6 @@ from sklearn.model_selection import train_test_split, GroupKFold, StratifiedKFol
 # Config
 # ------------------------------------------------------------------------------------
 FUNDUS_NORMALIZATION = "imagenet"
-VISIT_OFFSET = {"02": 0, "07": 5, "12": 10, "20": 18}
 ENDPOINTS = {
     "CHD": "fCHD_y",
     "CHDr": "fCHDr_y",
@@ -179,18 +178,9 @@ def load_shougang_test_ids(cmcs_standard_csv):
         raise RuntimeError("Cannot find 'subcohort' column in CMCS standard CSV.")
     shougang = set(df[df["subcohort"] == 102][id_col].astype(str).tolist())
     return shougang
-def attach_time_event(df_pid,df_label,modality):
-    df = df_pid.merge(df_label,on='pid',how='inner')
-    if modality == 'soma':
-        df['offset'] = df['visit'].map(VISIT_OFFSET)
-        df['adjusted_time'] = df['time'] - df['offset']
-        df = df[df['adjusted_time'] >= 0].copy()
-        return df
-    else:
-        df['offset'] = {'snp': 5, 'ecg': 5, 'fundus': 10}[modality]
-        df['adjusted_time'] = df['time'] - df['offset']
-        df = df[df['adjusted_time']>=0].copy()
-        return df
+def attach_time_event(df_pid, df_label, modality, time_origin_year=2002):
+    from pipelines.timebase import attach_followup
+    return attach_followup(df_pid.merge(df_label, on='pid', how='inner'), time_origin_year, modality)
 
 # ------------------------------------------------------------------------------------
 # Survival helpers
@@ -683,6 +673,7 @@ def main():
     parser.add_argument("--soma_gene_prefix", type=str, default="seq.",
                         help="Prefix of SOMA feature columns (default 'seq.' so 'seq.GENE')")
     parser.add_argument("--fundus_normalization", choices=["imagenet", "half", "none"], default="imagenet")
+    parser.add_argument("--time_origin_year", type=int, choices=[1992, 2002], default=2002)
     parser.add_argument("--soma_input_transform", choices=["raw", "log1p"], default="log1p")
     parser.add_argument("--grid_hidden", type=int, nargs="+", default=[64, 128, 256])
     parser.add_argument("--grid_layers", type=int, nargs="+", default=[1, 2, 3])
@@ -789,8 +780,8 @@ def main():
             tr_pid_df = tr_pid_df.merge(df_soma_all[['pid','visit']],on='pid',how='left')
             te_pid_df = te_pid_df.merge(df_soma_all[['pid','visit']],on='pid',how='left')
         #print(df_lab)
-        df_tr = attach_time_event(tr_pid_df, df_lab, modality)
-        df_te = attach_time_event(te_pid_df, df_lab, modality)
+        df_tr = attach_time_event(tr_pid_df, df_lab, modality, args.time_origin_year)
+        df_te = attach_time_event(te_pid_df, df_lab, modality, args.time_origin_year)
         #print('df_tr',df_tr)
         if modality != "soma":
             df_tr = df_tr.drop_duplicates(subset=["pid"]).reset_index(drop=True)
