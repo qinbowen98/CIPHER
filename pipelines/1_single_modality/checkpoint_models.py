@@ -8,12 +8,12 @@ SomaTokenEncoder = importlib.import_module('pipelines.1_single_modality.model').
 
 
 class ScalarTransformer(nn.Module):
-    def __init__(self, input_dim, layers):
+    def __init__(self, input_dim, layers, hidden=256, head_hidden=128):
         super().__init__()
-        self.proj = nn.Linear(input_dim, 256)
-        self.encoder = nn.TransformerEncoder(nn.TransformerEncoderLayer(256, 4, batch_first=True), layers)
-        self.cls_token = nn.Parameter(torch.zeros(1, 1, 256))
-        self.mlp = nn.Sequential(nn.Linear(256, 128), nn.ReLU(), nn.Linear(128, 1))
+        self.proj = nn.Linear(input_dim, hidden)
+        self.encoder = nn.TransformerEncoder(nn.TransformerEncoderLayer(hidden, 4, batch_first=True), layers)
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, hidden))
+        self.mlp = nn.Sequential(nn.Linear(hidden, head_hidden), nn.ReLU(), nn.Linear(head_hidden, 1))
 
     def forward(self, x):
         x = self.proj(x)
@@ -24,11 +24,11 @@ class ScalarTransformer(nn.Module):
 
 
 class SomaCheckpoint(nn.Module):
-    def __init__(self, features):
+    def __init__(self, features, hidden=256, layers=8):
         super().__init__()
-        self.encoder = SomaTokenEncoder(features, hidden_dim=256, nhead=4, nlayers=8)
+        self.encoder = SomaTokenEncoder(features, hidden_dim=hidden, nhead=4, nlayers=layers)
         self.head = nn.Module()
-        self.head.fc = nn.Linear(256, 1)
+        self.head.fc = nn.Linear(hidden, 1)
 
     def forward(self, x):
         return self.head.fc(self.encoder(x)).squeeze(-1)

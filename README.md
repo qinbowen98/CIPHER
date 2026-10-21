@@ -156,6 +156,37 @@ This entry loads the existing SNP/ECG Transformer, Soma Transformer and ViT chec
 
 For SNP/Soma, `scaler_root` can supply source-fitted transforms as `<modality>/<endpoint>.joblib`. Without stored transforms, the evaluator fits the original source-cohort transformation using non-SG participants with available modality data and outcomes: StandardScaler for SNP and empirical rank normalization for Soma. SG values are transformed without refitting. The evaluation manifest records the chosen scope and feature order. Predictions, transforms, Grad-CAM files and metrics remain in the protected output directory.
 
+### Load the supplied neural checkpoints
+
+`single-test` loads both the supplied standalone SNP/ECG checkpoints and encoder-plus-head checkpoints produced by the architecture-search entry point. Input dimensions and Transformer depths are read from the weights; all tensors must match. The supplied `ckpt_final_1229` directory is the single-modality checkpoint root.
+
+```bash
+python -m pipelines.check_weights \
+  --single-root data/private/ckpt_final_1229 \
+  --fusion-dir data/private/fusion_checkpoints \
+  --report private_runs/checkpoint_loading.json
+```
+
+This checks every local checkpoint, including full forward passes with synthetic inputs, without reading participant data. Complete fusion checkpoints restore all encoders, attention/risk heads and `fundus_proj`; single-modality initialization is disabled when loading a complete fusion model.
+
+To evaluate a supplied folder containing `CHD_model.pt`, `istroke_model.pt` and `ICVD_model.pt`, use `python -m pipelines.2_multi_modality.evaluate_checkpoints --checkpoint_dir data/private/fusion_checkpoints` with the same protected input arguments as the training entry point and `--cmcs_standard_csv`. `--soma_scaler` accepts the original fitted IRN; otherwise it is reconstructed from source BD visit-02 protein inputs. Historical fusion SNP inputs are raw dosages by default; supply `--snp_scaler` only for checkpoints trained with that transform. `--evaluation_visits` selects protein visits and `--save_ig` exports multi-SG individual attributions. Outputs remain private.
+
+```bash
+bash pipelines/2_multi_modality/run_checkpoints.sh \
+  --checkpoint_dir data/private/fusion_checkpoints \
+  --soma_train data/private/soma_bd.csv \
+  --soma_valid data/private/soma_sg.csv \
+  --snp_prefix data/private/snp/cohort \
+  --fundus_dir data/private/fundus \
+  --ecg_dir data/private/ecg \
+  --label_csv data/private/outcomes.csv \
+  --soma_gene_csv pipelines/0_preprocess/soma_panels/replicate_2.csv \
+  --cmcs_standard_csv data/private/cohort_metadata.csv \
+  --outdir private_runs/fusion_checkpoint_evaluation
+```
+
+The supplied weights require 81,651 SNPs and 1,795 protein assay features. Inputs must retain the original feature order and preprocessing. Tensor loading and synthetic forward checks do not establish numerical reproduction of historical participant predictions.
+
 ### Follow-up origin
 
 `time_origin_year` declares the origin of the supplied outcome-duration columns. With origin 2002, SNP/ECG offsets are five years and fundus offsets ten years; Soma uses its recorded visit. With origin 1992, the corresponding offsets are fifteen and twenty years, and Soma visit 02 has offset ten. Both represent the same measurement dates when paired with correctly defined outcome durations. Negative post-measurement follow-up is excluded. Repeated-visit output records retain their visit labels.

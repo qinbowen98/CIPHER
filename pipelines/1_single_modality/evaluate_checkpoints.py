@@ -1,6 +1,5 @@
 """Evaluate frozen unimodal checkpoints in explicitly defined SG cohorts."""
 import argparse
-import importlib
 import json
 from pathlib import Path
 import joblib
@@ -10,12 +9,12 @@ import torch
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader
 from lifelines.utils import concordance_index
-from pipelines.checkpoint_io import endpoint_checkpoints, load_matching
+from pipelines.checkpoint_io import endpoint_checkpoints
 from pipelines.gradcam import export_maps
 from pipelines.metrics import event_auroc
 from pipelines.timebase import attach_followup
 from pipelines.torch_data import add_input_arguments, load_assets, FusionDataset, outcome_rows, soma_tools
-build_model = importlib.import_module('pipelines.1_single_modality.checkpoint_models').build_checkpoint_model
+from pipelines.neural_checkpoints import load_single_model
 
 
 def cohort_ids(assets, modality, cohort):
@@ -79,8 +78,9 @@ def main():
             else:
                 evaluation.loc[:, assets['features']] = scaler.transform(evaluation[assets['features']].to_numpy(float))
             joblib.dump(scaler, output / (endpoint + '_source_scaler.joblib'))
-        model = build_model(args.modality, assets['snp'].shape[1], assets['features']).to(device)
-        loading = load_matching(model, endpoint_checkpoints(args.ckpt_root, endpoint)[args.modality])
+        model, loading = load_single_model(
+            endpoint_checkpoints(args.ckpt_root, endpoint)[args.modality], args.modality,
+            snp_dim=assets['snp'].shape[1], features=assets['features'], device=device)
         dataset = FusionDataset(evaluation, current, [args.modality], args.fundus_normalization)
         records = []
         model.eval()
