@@ -91,7 +91,7 @@ python pipelines/run.py single
 
 This stage prepares modality-specific participant sets and uses participant-grouped five-fold cross-validation. SNP, protein, and ECG Transformer models search hidden dimensions 64/128/256, encoder depths 1/2/3, learning rates 1e-4/3e-4/1e-3, and batch sizes 32/64/128/256. ECG BiLSTM searches hidden size/depth, and the CNN searches filter count. Mean validation C-index across all five folds selects the architecture and optimization settings. Mean validation C-index selects the hyperparameter setting; the highest-validation-C-index fold within that setting supplies the saved checkpoint and its fitted preprocessing. Evaluation then uses the held-out external set.
 
-The example runs seeds 42, 66, and 100, learning rates 1e-4/3e-4/1e-3, and batch sizes 32/64/128/256. Models include molecular Transformer, MLP-Cox and PCA-Cox, ECG Transformer/BiLSTM/CNN, and fundus backbones. Outputs include checkpoints, predictions, embeddings, training curves, and aggregate evaluation metrics.
+Models include molecular Transformer, MLP-Cox and PCA-Cox, ECG Transformer/BiLSTM/CNN, and fundus backbones. Outputs include checkpoints, predictions, embeddings, training curves, and aggregate evaluation metrics.
 
 ```bash
 bash pipelines/1_single_modality/run_soma_ablation.sh
